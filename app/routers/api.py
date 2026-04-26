@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Channel, Portal
 from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse, OpenLineSet
-from app.services.bitrix import activate_connector, get_open_lines
+from app.services.bitrix import activate_connector, create_open_line, get_open_lines
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -55,6 +55,19 @@ def list_open_lines(member_id: str, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка получения линий из Битрикс24: {e}")
     return {"lines": lines, "current_line_id": portal.open_line_id}
+
+
+@router.post("/open-lines/create")
+def create_line(member_id: str, db: Session = Depends(get_db)):
+    portal = get_portal_or_404(member_id, db)
+    try:
+        line_id = create_open_line(portal, db, "MAX Bot")
+        activate_connector(portal, db, line_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")
+    portal.open_line_id = line_id
+    db.commit()
+    return {"line_id": line_id}
 
 
 @router.post("/portal/open-line")

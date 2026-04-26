@@ -156,16 +156,40 @@ function renderOpenLine(data) {
     ? (line.LINE_NAME || line.NAME || ('Линия #' + data.current_line_id))
     : (data.current_line_id ? ('Линия #' + data.current_line_id) : null);
 
+  var lines = data.lines || [];
   if (name) {
     status.innerHTML =
       '<span class="badge badge-active rounded-pill me-2">Подключена</span>' + esc(name) +
       ' <button class="btn btn-outline-secondary btn-sm ms-2" onclick="editOpenLine()">Изменить</button>';
-  } else {
+  } else if (lines.length) {
     status.innerHTML =
       '<span class="badge badge-warning rounded-pill me-2">Не выбрана</span>' +
       'Выберите открытую линию — без неё сообщения от клиентов не попадут в Битрикс24.' +
       ' <button class="btn btn-primary btn-sm ms-2" onclick="editOpenLine()">Выбрать линию</button>';
+  } else {
+    status.innerHTML =
+      '<span class="badge badge-warning rounded-pill me-2">Не создана</span>' +
+      'В вашем Битрикс24 нет открытых линий. Нажмите кнопку, чтобы создать линию «MAX Bot» автоматически.' +
+      ' <button class="btn btn-primary btn-sm ms-2" id="createLineBtn" onclick="createOpenLine()">Создать линию</button>';
   }
+}
+
+function createOpenLine() {
+  if (!confirm('Создать открытую линию «MAX Bot» в Битрикс24?')) return;
+  var btn = document.getElementById('createLineBtn');
+  btn.disabled = true;
+  btn.textContent = 'Создаём...';
+  fetch('/api/open-lines/create?member_id=' + encodeURIComponent(memberId), {method: 'POST'})
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
+      return r.json();
+    })
+    .then(function() { loadOpenLines(); })
+    .catch(function(e) {
+      btn.disabled = false;
+      btn.textContent = 'Создать линию';
+      alert('Ошибка: ' + e.message);
+    });
 }
 
 function editOpenLine() {

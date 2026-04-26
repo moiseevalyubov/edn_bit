@@ -56,6 +56,19 @@ def get_open_lines(portal: Portal, db: Session) -> list:
     return result.get("result", [])
 
 
+def create_open_line(portal: Portal, db: Session, name: str) -> str:
+    result = call_bitrix(
+        portal,
+        db,
+        "imopenlines.config.add",
+        {"fields": {"LINE_NAME": name, "QUEUE_TYPE": 0}},
+    )
+    line_id = str(result.get("result", ""))
+    if not line_id:
+        raise ValueError("Битрикс24 не вернул ID созданной линии")
+    return line_id
+
+
 def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
     call_bitrix(
         portal,
