@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -35,6 +35,11 @@ def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
     if auth.get("client_endpoint"):
         portal.client_endpoint = auth["client_endpoint"]
     db.commit()
+
+
+@router.get("/handler")
+async def handler_page():
+    return RedirectResponse("/settings")
 
 
 @router.post("/handler")
