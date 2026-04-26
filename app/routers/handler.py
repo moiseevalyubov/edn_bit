@@ -44,6 +44,12 @@ async def handler_page():
 
 @router.post("/handler")
 async def handler(request: Request, db: Session = Depends(get_db)):
+    content_type = request.headers.get("content-type", "")
+
+    # Bitrix24 opens the app in iframe via POST with form data — redirect to settings UI
+    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        return RedirectResponse("/settings", status_code=303)
+
     body = await request.body()
     logger.info("Handler received: %s", body[:500])
 
