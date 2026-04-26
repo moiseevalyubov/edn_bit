@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import Channel, Portal
-from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse
+from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse, OpenLineSet
+from app.services.bitrix import activate_connector, get_open_lines
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -44,6 +45,28 @@ def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
 
     webhook_url = f"{settings.app_base_url}/incoming"
     return ChannelSaveResponse(channel=ChannelResponse.model_validate(channel), webhook_url=webhook_url)
+
+
+@router.get("/open-lines")
+def list_open_lines(member_id: str, db: Session = Depends(get_db)):
+    portal = get_portal_or_404(member_id, db)
+    try:
+        lines = get_open_lines(portal, db)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка получения линий из Битрикс24: {e}")
+    return {"lines": lines, "current_line_id": portal.open_line_id}
+
+
+@router.post("/portal/open-line")
+def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
+    portal = get_portal_or_404(body.member_id, db)
+    try:
+        activate_connector(portal, db, body.line_id)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Ошибка активации коннектора: {e}")
+    portal.open_line_id = body.line_id
+    db.commit()
+    return {"success": True}
 
 
 @router.post("/channels/{channel_id}/disconnect")

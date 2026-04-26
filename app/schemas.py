@@ -25,3 +25,8 @@ class ChannelResponse(BaseModel):
 class ChannelSaveResponse(BaseModel):
     channel: ChannelResponse
     webhook_url: str
+
+
+class OpenLineSet(BaseModel):
+    member_id: str
+    line_id: str

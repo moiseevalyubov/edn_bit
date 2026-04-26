@@ -22,6 +22,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
     .webhook-box { background: #e8f0fe; border-radius: 6px; padding: 10px 14px; word-break: break-all; font-family: monospace; font-size: 13px; }
     .badge-active { background: #d4edda; color: #155724; }
     .badge-inactive { background: #f8d7da; color: #721c24; }
+    .badge-warning { background: #fff3cd; color: #856404; }
   </style>
 </head>
 <body>
@@ -33,7 +34,22 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="main" style="display:none">
-    <h5 class="mb-4">MAX Bot — подключённые каналы</h5>
+    <h5 class="mb-4">MAX Bot — настройки</h5>
+
+    <!-- Open Line section -->
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">Открытая линия Битрикс24</div>
+      <div class="card-body">
+        <p class="text-muted small mb-3">Сообщения от клиентов MAX Bot будут поступать в эту открытую линию.</p>
+        <div id="openLineStatus"></div>
+        <div id="openLineForm" class="d-none mt-2">
+          <select class="form-select mb-2" id="lineSelect"></select>
+          <div id="openLineError" class="alert alert-danger d-none mb-2"></div>
+          <button class="btn btn-primary btn-sm" id="saveLineBtn" onclick="saveOpenLine()">Сохранить</button>
+          <button class="btn btn-outline-secondary btn-sm ms-2" onclick="cancelLineEdit()">Отмена</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Channels list -->
     <div class="card mb-4">
@@ -94,6 +110,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <script src="//api.bitrix24.com/api/v1/"></script>
 <script>
 var memberId = null;
+var openLinesData = null;
 
 BX24.init(function() {
   BX24.callMethod('profile', {}, function(res) {
@@ -101,10 +118,10 @@ BX24.init(function() {
       showError('Ошибка авторизации Битрикс24');
       return;
     }
-    // Get member_id from auth
     var auth = BX24.getAuth();
     memberId = auth.member_id;
     loadChannels();
+    loadOpenLines();
   });
 });
 
@@ -119,6 +136,88 @@ function loadChannels() {
     .catch(function(e) {
       document.getElementById('loading').innerHTML = '<p class="text-danger">Ошибка загрузки каналов</p>';
     });
+}
+
+function loadOpenLines() {
+  fetch('/api/open-lines?member_id=' + encodeURIComponent(memberId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) { openLinesData = data; renderOpenLine(data); })
+    .catch(function() {
+      document.getElementById('openLineStatus').innerHTML = '<span class="text-danger">Не удалось загрузить список линий</span>';
+    });
+}
+
+function renderOpenLine(data) {
+  var status = document.getElementById('openLineStatus');
+  var line = data.current_line_id
+    ? (data.lines || []).find(function(l) { return String(l.ID) === String(data.current_line_id); })
+    : null;
+  var name = line
+    ? (line.LINE_NAME || line.NAME || ('Линия #' + data.current_line_id))
+    : (data.current_line_id ? ('Линия #' + data.current_line_id) : null);
+
+  if (name) {
+    status.innerHTML =
+      '<span class="badge badge-active rounded-pill me-2">Подключена</span>' + esc(name) +
+      ' <button class="btn btn-outline-secondary btn-sm ms-2" onclick="editOpenLine()">Изменить</button>';
+  } else {
+    status.innerHTML =
+      '<span class="badge badge-warning rounded-pill me-2">Не выбрана</span>' +
+      'Выберите открытую линию — без неё сообщения от клиентов не попадут в Битрикс24.' +
+      ' <button class="btn btn-primary btn-sm ms-2" onclick="editOpenLine()">Выбрать линию</button>';
+  }
+}
+
+function editOpenLine() {
+  var select = document.getElementById('lineSelect');
+  select.innerHTML = '';
+  var lines = openLinesData && openLinesData.lines ? openLinesData.lines : [];
+  if (!lines.length) {
+    select.innerHTML = '<option disabled>Нет доступных открытых линий</option>';
+  } else {
+    lines.forEach(function(l) {
+      var opt = document.createElement('option');
+      opt.value = l.ID;
+      opt.textContent = l.LINE_NAME || l.NAME || ('Линия #' + l.ID);
+      if (openLinesData && String(l.ID) === String(openLinesData.current_line_id)) opt.selected = true;
+      select.appendChild(opt);
+    });
+  }
+  document.getElementById('openLineError').classList.add('d-none');
+  document.getElementById('openLineForm').classList.remove('d-none');
+  document.getElementById('openLineStatus').classList.add('d-none');
+}
+
+function cancelLineEdit() {
+  document.getElementById('openLineForm').classList.add('d-none');
+  document.getElementById('openLineStatus').classList.remove('d-none');
+}
+
+function saveOpenLine() {
+  var lineId = document.getElementById('lineSelect').value;
+  if (!lineId) return;
+  document.getElementById('saveLineBtn').disabled = true;
+  document.getElementById('openLineError').classList.add('d-none');
+  fetch('/api/portal/open-line', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({member_id: memberId, line_id: lineId})
+  })
+  .then(function(r) {
+    if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка сохранения'); });
+    return r.json();
+  })
+  .then(function() {
+    document.getElementById('saveLineBtn').disabled = false;
+    cancelLineEdit();
+    loadOpenLines();
+  })
+  .catch(function(e) {
+    document.getElementById('saveLineBtn').disabled = false;
+    var err = document.getElementById('openLineError');
+    err.textContent = e.message;
+    err.classList.remove('d-none');
+  });
 }
 
 function renderChannels(channels) {

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Portal
-from app.services.bitrix import activate_connector, bind_events, get_open_lines, register_connector
+from app.services.bitrix import bind_events, register_connector
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -61,13 +61,6 @@ async def install(request: Request, db: Session = Depends(get_db)):
     try:
         register_connector(portal, db)
         bind_events(portal, db)
-        lines = get_open_lines(portal, db)
-        if lines:
-            first_line = str(lines[0].get("ID", ""))
-            if first_line:
-                activate_connector(portal, db, first_line)
-                portal.open_line_id = first_line
-                db.commit()
     except Exception as e:
         logger.warning("Post-install setup error (non-critical): %s", e)
 
@@ -78,7 +71,11 @@ async def install(request: Request, db: Session = Depends(get_db)):
 <body style="font-family:sans-serif;padding:40px;text-align:center;background:#f5f5f5">
   <div style="background:white;padding:40px;border-radius:12px;max-width:500px;margin:0 auto;box-shadow:0 2px 8px rgba(0,0,0,.1)">
     <h2 style="color:#005FF9">✓ MAX Bot успешно установлен</h2>
-    <p>Теперь перейдите в настройки коннектора, чтобы подключить каналы MAX Bot.</p>
+    <p>Перейдите в настройки коннектора, чтобы:</p>
+    <ol style="text-align:left;margin-top:12px">
+      <li>Выбрать открытую линию Битрикс24</li>
+      <li>Подключить каналы MAX Bot</li>
+    </ol>
   </div>
   <script src="//api.bitrix24.com/api/v1/"></script>
   <script>BX24.init(function(){ BX24.installFinish(); });</script>
