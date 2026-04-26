@@ -22,12 +22,25 @@ async def install(request: Request, db: Session = Depends(get_db)):
     if not params:
         params = dict(request.query_params)
 
+    logger.info("Install params keys: %s", list(params.keys()))
+    logger.info("Install params: %s", {k: v for k, v in params.items() if "token" not in k.lower() and "secret" not in k.lower()})
+
     member_id = params.get("member_id") or params.get("MEMBER_ID")
     access_token = params.get("AUTH_ID")
     refresh_token_val = params.get("REFRESH_ID")
     auth_expires = int(params.get("AUTH_EXPIRES", 3600))
-    client_endpoint = params.get("client_endpoint", "")
     app_token = params.get("APPLICATION_TOKEN")
+
+    client_endpoint = params.get("client_endpoint", "")
+    if not client_endpoint:
+        domain = params.get("DOMAIN") or params.get("domain", "")
+        protocol = params.get("PROTOCOL", "1")
+        scheme = "https" if str(protocol) == "1" else "http"
+        if domain:
+            client_endpoint = f"{scheme}://{domain}/rest/"
+            logger.info("Built client_endpoint from DOMAIN: %s", client_endpoint)
+
+    logger.info("Install: member_id=%s client_endpoint=%s", member_id, client_endpoint)
 
     if not member_id or not access_token:
         logger.error("Install called without credentials: %s", params.keys())
