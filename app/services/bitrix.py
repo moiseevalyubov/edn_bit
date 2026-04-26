@@ -1,3 +1,4 @@
+import logging
 import time
 
 import httpx
@@ -7,6 +8,7 @@ from app.config import settings
 from app.models import Portal
 from app.services.token import get_valid_token
 
+logger = logging.getLogger(__name__)
 CONNECTOR_ID = "max_bot"
 
 
@@ -14,6 +16,8 @@ def call_bitrix(portal: Portal, db: Session, method: str, params: dict) -> dict:
     token = get_valid_token(portal, db)
     url = f"{portal.client_endpoint}{method}"
     response = httpx.post(url, json={**params, "auth": token}, timeout=10)
+    if not response.is_success:
+        logger.error("Bitrix24 API error [%s %s]: %s", response.status_code, method, response.text[:500])
     response.raise_for_status()
     return response.json()
 
