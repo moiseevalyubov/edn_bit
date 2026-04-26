@@ -82,6 +82,22 @@ def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
     return {"success": True}
 
 
+@router.post("/portal/repair-endpoint")
+def repair_endpoint(body: dict, db: Session = Depends(get_db)):
+    member_id = body.get("member_id", "")
+    domain = body.get("domain", "")
+    if not member_id or not domain:
+        raise HTTPException(status_code=400, detail="member_id и domain обязательны")
+    portal = db.query(Portal).filter_by(member_id=member_id).first()
+    if not portal:
+        raise HTTPException(status_code=404, detail="Портал не найден")
+    if not portal.client_endpoint:
+        portal.client_endpoint = f"https://{domain}/rest/"
+        db.commit()
+        logger.info("Repaired client_endpoint for %s: %s", member_id, portal.client_endpoint)
+    return {"client_endpoint": portal.client_endpoint}
+
+
 @router.post("/channels/{channel_id}/disconnect")
 def disconnect_channel(channel_id: int, member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)

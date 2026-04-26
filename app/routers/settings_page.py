@@ -120,6 +120,13 @@ BX24.init(function() {
     }
     var auth = BX24.getAuth();
     memberId = auth.member_id;
+    if (auth.domain) {
+      fetch('/api/portal/repair-endpoint', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({member_id: memberId, domain: auth.domain})
+      }).catch(function() {});
+    }
     loadChannels();
     loadOpenLines();
   });
