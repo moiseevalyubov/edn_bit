@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/incoming")
+async def incoming_verify():
+    return JSONResponse({"status": "ok"})
+
+
 @router.post("/incoming")
 async def incoming(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
