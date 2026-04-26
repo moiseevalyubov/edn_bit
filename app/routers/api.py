@@ -9,7 +9,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Channel, Portal
 from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse, OpenLineSet
-from app.services.bitrix import activate_connector, create_open_line, get_open_lines
+from app.services.bitrix import activate_connector, bind_events, create_open_line, get_open_lines, register_connector
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -95,6 +95,12 @@ def repair_endpoint(body: dict, db: Session = Depends(get_db)):
         portal.client_endpoint = f"https://{domain}/rest/"
         db.commit()
         logger.info("Repaired client_endpoint for %s: %s", member_id, portal.client_endpoint)
+    try:
+        register_connector(portal, db)
+        bind_events(portal, db)
+        logger.info("Re-registered connector and events for %s", member_id)
+    except Exception as e:
+        logger.warning("Re-registration failed (non-critical): %s", e)
     return {"client_endpoint": portal.client_endpoint}
 
 
