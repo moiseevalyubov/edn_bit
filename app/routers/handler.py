@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -17,11 +18,41 @@ router = APIRouter()
 
 
 def strip_bbcode(text: str) -> str:
-    """Remove Bitrix24 BBCode tags from operator text."""
     text = re.sub(r"\[b\].*?\[/b\]\s*", "", text)
     text = re.sub(r"\[br\]", "\n", text)
     text = re.sub(r"\[[^\]]+\]", "", text)
     return text.strip()
+
+
+def _deep_set(obj: dict, parts: list, value: str) -> None:
+    key = parts[0]
+    if len(parts) == 1:
+        obj[key] = value
+        return
+    next_key = parts[1]
+    if key not in obj:
+        obj[key] = [] if next_key.isdigit() else {}
+    child = obj[key]
+    if isinstance(child, list):
+        idx = int(next_key)
+        while len(child) <= idx:
+            child.append({})
+        _deep_set(child[idx], parts[2:], value)
+    else:
+        _deep_set(child, parts[1:], value)
+
+
+def _parse_php_form(flat: dict) -> dict:
+    """Convert PHP-style flat form params to nested dict.
+
+    e.g. {'data[MESSAGES][0][chat][id]': ['abc']} → {'data': {'MESSAGES': [{'chat': {'id': 'abc'}}]}}
+    """
+    result = {}
+    for raw_key, values in flat.items():
+        value = values[0] if isinstance(values, list) else values
+        parts = re.findall(r"[^\[\]]+", raw_key)
+        _deep_set(result, parts, value)
+    return result
 
 
 def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
@@ -44,20 +75,25 @@ async def handler_page():
 
 @router.post("/handler")
 async def handler(request: Request, db: Session = Depends(get_db)):
+    body = await request.body()
     content_type = request.headers.get("content-type", "")
 
-    # Bitrix24 opens the app in iframe via POST with form data — redirect to settings UI
-    if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+    if "application/x-www-form-urlencoded" in content_type:
+        flat = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        data = _parse_php_form(flat)
+        if not data.get("event"):
+            # Bitrix24 opens the app in iframe — redirect to settings UI
+            return RedirectResponse("/settings", status_code=303)
+        logger.info("Handler received form-encoded event: %s", data.get("event"))
+    elif "multipart/form-data" in content_type:
         return RedirectResponse("/settings", status_code=303)
-
-    body = await request.body()
-    logger.info("Handler received: %s", body[:500])
-
-    try:
-        data = json.loads(body)
-    except Exception:
-        logger.error("Handler: failed to parse JSON body")
-        return JSONResponse({"status": "ok"})
+    else:
+        logger.info("Handler received: %s", body[:500])
+        try:
+            data = json.loads(body)
+        except Exception:
+            logger.error("Handler: failed to parse body (content-type=%s): %s", content_type, body[:200])
+            return JSONResponse({"status": "ok"})
 
     event = data.get("event", "").upper()
     auth = data.get("auth", {})
