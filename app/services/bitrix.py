@@ -47,12 +47,17 @@ def register_connector(portal: Portal, db: Session) -> None:
 
 def bind_events(portal: Portal, db: Session) -> None:
     handler_url = f"{settings.app_base_url}/handler"
+    if not settings.app_base_url:
+        logger.error("APP_BASE_URL is not set — event handler URL will be invalid: %r", handler_url)
+    else:
+        logger.info("Binding events with handler_url=%s", handler_url)
     for event in [
         "OnImConnectorMessageAdd",
         "OnImConnectorDialogStart",
         "OnImConnectorDialogFinish",
     ]:
         call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})
+        logger.info("Bound event %s → %s", event, handler_url)
 
 
 def get_open_lines(portal: Portal, db: Session) -> list:

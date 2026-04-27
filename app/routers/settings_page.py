@@ -1,11 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
 
-@router.get("/settings", response_class=HTMLResponse)
-async def settings_page():
+@router.api_route("/settings", methods=["GET", "POST"], response_class=HTMLResponse)
+async def settings_page(request: Request):
     return HTMLResponse(SETTINGS_HTML)
 
 

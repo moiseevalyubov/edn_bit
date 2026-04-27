@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.routers import api, handler, incoming, install, settings_page
+from app.config import settings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,6 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
+
+if settings.app_base_url:
+    logger.info("APP_BASE_URL configured: %s", settings.app_base_url)
+else:
+    logger.error("APP_BASE_URL is NOT set — event binding and webhook URLs will be broken!")
 
 app = FastAPI(title="MAX Bot — Bitrix24 Connector", version="1.0.0")
 

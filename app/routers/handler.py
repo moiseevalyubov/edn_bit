@@ -86,6 +86,8 @@ async def handler(request: Request, db: Session = Depends(get_db)):
 def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
     messages = data.get("data", {}).get("MESSAGES", [])
     line_id = data.get("data", {}).get("LINE")
+    logger.info("_handle_outgoing_message: portal=%s, messages_count=%d, line_id=%s",
+                portal.member_id, len(messages), line_id)
 
     for msg in messages:
         chat_id = msg.get("chat", {}).get("id")
@@ -94,7 +96,14 @@ def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
         im_chat_id = msg.get("im", {}).get("chat_id")
         im_message_id = msg.get("im", {}).get("message_id")
 
-        if not chat_id or not text:
+        logger.info("Processing msg: chat_id=%r, raw_text=%r, text_after_strip=%r",
+                    chat_id, raw_text[:100], text[:100] if text else "")
+
+        if not chat_id:
+            logger.warning("Skipping msg: chat_id is empty")
+            continue
+        if not text:
+            logger.warning("Skipping msg: text is empty after BBCode strip (raw=%r)", raw_text[:200])
             continue
 
         # Find active channel by subscriber_identifier (= chat_id)
@@ -110,18 +119,22 @@ def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
         if not channel:
             # Fallback: use first active channel of this portal
             channel = db.query(Channel).filter_by(portal_id=portal.id, is_active=True).first()
+            if channel:
+                logger.info("Using fallback channel (id=%d) for chat_id=%s", channel.id, chat_id)
 
         if not channel:
             logger.warning("No active channel for portal %s, chat %s", portal.member_id, chat_id)
             continue
 
+        logger.info("Sending to edna: sender=%s, max_id=%s, text=%r", channel.sender, chat_id, text[:100])
         try:
-            send_message(
+            result = send_message(
                 api_key=channel.api_key,
                 sender=channel.sender,
                 max_id=chat_id,
                 text=text,
             )
+            logger.info("edna response: %s", result)
 
             db.add(
                 Message(
