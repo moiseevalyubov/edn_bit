@@ -152,6 +152,7 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
 
         logger.info("Processing msg: chat_id=%r, raw_text=%r, text_after_strip=%r",
                     chat_id, raw_text[:100], text[:100] if text else "")
+        logger.info("Full msg dict: %s", msg)
 
         if not chat_id:
             logger.warning("Skipping msg: chat_id is empty")
