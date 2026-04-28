@@ -1,17 +1,24 @@
+import logging
+
 import httpx
 
 MAXBOT_API_URL = "https://app.edna.ru/api/v1/out-messages/max-bot"
 VALID_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "DOCUMENT"}
+logger = logging.getLogger(__name__)
 
 
 async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
+    payload = {"sender": sender, "maxId": max_id, "content": content}
+    logger.info("edna request payload: %s", payload)
     async with httpx.AsyncClient() as client:
         response = await client.post(
             MAXBOT_API_URL,
             headers={"Content-Type": "application/json", "X-API-KEY": api_key},
-            json={"sender": sender, "maxId": max_id, "content": content},
+            json=payload,
             timeout=10,
         )
+    if not response.is_success:
+        logger.error("edna error %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
     return response.json()
 
