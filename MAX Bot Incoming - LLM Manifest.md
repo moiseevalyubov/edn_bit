@@ -228,6 +228,7 @@ https://files.mfms.ru/imfiles4s/{channel}/{uuid}.{ext}?AWSAccessKeyId=...&Expire
 2. Determine `messageContent.type`.
 3. Для `TEXT`: извлечь `text`.
 4. Для `IMAGE`, `DOCUMENT`, `AUDIO`, `VIDEO`, `VOICE`: извлечь `attachment.url`. Имя файла — из пути URL (`urlparse(url).path.split("/")[-1]`), т.к. `attachment.name` всегда null. Передать URL напрямую в `imconnector.send.messages` в параметр `files`.
+5. Для `LOCATION`: извлечь `location.latitude`, `location.longitude`, опционально `location.address`. Сформировать текстовое сообщение со ссылкой на Яндекс.Карты: `https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map`. Bitrix24 не поддерживает геолокацию как отдельный тип — конвертация в текст единственный вариант.
 5. Use `subscriber.identifier` as the unique user identifier for routing in Bitrix24.
 
 ---
@@ -242,7 +243,7 @@ https://files.mfms.ru/imfiles4s/{channel}/{uuid}.{ext}?AWSAccessKeyId=...&Expire
 | AUDIO    | ✅ Реализован     | Голосовые сообщения (`.mpga`) |
 | VIDEO    | ✅ Реализован     | На практике не наблюдался от MAX Bot |
 | VOICE    | ✅ Реализован     | На практике не наблюдался от MAX Bot |
-| LOCATION | ⬜ Не реализован  | Другая структура — нет `attachment`, есть `location` |
+| LOCATION | ✅ Реализован     | Конвертируется в текст со ссылкой на Яндекс.Карты |
 
 ---
 

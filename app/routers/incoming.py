@@ -52,7 +52,7 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
 
     _ATTACHMENT_TYPES = {"IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "VOICE"}
 
-    if msg_type not in ("TEXT", *_ATTACHMENT_TYPES):
+    if msg_type not in ("TEXT", "LOCATION", *_ATTACHMENT_TYPES):
         logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
         return JSONResponse({"status": "ok"})
 
@@ -94,6 +94,39 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
                 direction="incoming",
                 text=caption or file_name,
                 content_type=msg_type,
+                max_message_id=msg_id,
+                subscriber_identifier=subscriber_identifier,
+                sent_at=datetime.utcnow(),
+                raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
+            ))
+            db.commit()
+
+        elif msg_type == "LOCATION":
+            loc = msg_content.get("location") or {}
+            lat = loc.get("latitude")
+            lon = loc.get("longitude")
+            if not lat or not lon:
+                logger.warning("Incoming LOCATION: missing coordinates")
+                return JSONResponse({"status": "ok"})
+
+            maps_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
+            address = loc.get("address")
+            text = f"📍 {address}\n{maps_url}" if address else f"📍 Местоположение: {maps_url}"
+
+            await send_message_to_bitrix(
+                portal=portal,
+                db=db,
+                chat_id=chat_id,
+                user_id=subscriber_id or subscriber_identifier,
+                user_name=user_name,
+                text=text,
+                msg_id=msg_id,
+            )
+            db.add(Message(
+                channel_id=channel.id,
+                direction="incoming",
+                text=text,
+                content_type="LOCATION",
                 max_message_id=msg_id,
                 subscriber_identifier=subscriber_identifier,
                 sent_at=datetime.utcnow(),
