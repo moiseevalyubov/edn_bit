@@ -152,19 +152,17 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
 
         logger.info("Processing msg: chat_id=%r, raw_text=%r, text_after_strip=%r",
                     chat_id, raw_text[:100], text[:100] if text else "")
-        logger.info("Full msg dict: %s", msg)
 
         if not chat_id:
             logger.warning("Skipping msg: chat_id is empty")
             continue
 
-        # Extract file attachment from Bitrix24 payload
-        file_params = msg.get("message", {}).get("params", {})
-        file_info = file_params.get("FILE")  # None if no attachment
+        # Extract file attachment from Bitrix24 payload (files array)
+        files = msg.get("message", {}).get("files", [])
+        file_info = files[0] if files else None
 
-        # Log full params when non-empty (helps verify actual format on first production hit)
-        if file_params:
-            logger.info("Message params: %s", file_params)
+        if files:
+            logger.info("File attachments: %s", files)
 
         if not text and not file_info:
             logger.warning("Skipping msg: no text and no attachment (raw=%r)", raw_text[:200])
@@ -191,15 +189,15 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             continue
 
         if file_info:
-            file_url = file_info.get("LINK") or file_info.get("link", "")
-            file_name = file_info.get("NAME") or file_info.get("name", "")
-            file_content_type = file_info.get("CONTENT_TYPE") or file_info.get("type", "")
+            file_url = file_info.get("downloadLink") or file_info.get("link", "")
+            file_name = file_info.get("name", "")
+            mime = file_info.get("mime", "")
 
             if not file_url or not file_name:
-                logger.warning("File attachment missing LINK or NAME, skipping: %s", file_info)
+                logger.warning("File attachment missing link or name, skipping: %s", file_info)
                 continue
 
-            max_type = _detect_media_type(file_content_type, file_name)
+            max_type = _detect_media_type(mime, file_name)
             caption = text if text else None  # text becomes caption for media
 
             try:
