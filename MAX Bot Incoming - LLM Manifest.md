@@ -150,26 +150,73 @@ https://files.mfms.ru/imfiles4s/{channel}/{uuid}.{ext}?AWSAccessKeyId=...&Expire
             "name": null,
             "size": null
         },
-        "location": null,
-        "referral": null,
-        "caption": null,
-        "text": null,
-        "payload": null,
-        "story": null,
-        "items": null,
-        "contact": null,
-        "product": null,
-        "catalog": null,
-        "order": null,
-        "callPermissionReply": null
+        "location": null, "referral": null, "caption": null, "text": null,
+        "payload": null, "story": null, "items": null, "contact": null,
+        "product": null, "catalog": null, "order": null, "callPermissionReply": null
     },
     "receivedAt": "2026-04-28T17:11:57Z",
-    "replyOutMessageId": null,
-    "replyOutMessageExternalRequestId": null,
-    "replyInMessageId": null,
-    "lastMessage": null
+    "replyOutMessageId": null, "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null, "lastMessage": null
 }
 ```
+
+## Sample Webhook Body — DOCUMENT Message (PDF или видео из галереи)
+
+```json
+{
+    "id": 14558980901,
+    "subject": "ednapulse_prodbot",
+    "subjectId": 13556,
+    "subscriber": {"id": 176469628, "identifier": "194089586"},
+    "userInfo": {"userName": null, "firstName": "Lyubov", "lastName": "", "avatarUrl": "https://files.mfms.ru/..."},
+    "messageContent": {
+        "type": "DOCUMENT",
+        "attachment": {
+            "url": "https://files.mfms.ru/imfiles4s/ednapulse_prodbot/aqr2kyqAQ-CfIT1GXj5iew.pdf?AWSAccessKeyId=imfiles4s&Expires=...&Signature=...",
+            "name": null,
+            "size": null
+        },
+        "location": null, "referral": null, "caption": null, "text": null,
+        "payload": null, "story": null, "items": null, "contact": null,
+        "product": null, "catalog": null, "order": null, "callPermissionReply": null
+    },
+    "receivedAt": "2026-04-28T17:26:18Z",
+    "replyOutMessageId": null, "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null, "lastMessage": null
+}
+```
+
+**Важно:** тип `DOCUMENT` используется для двух разных медиа:
+- PDF-файлы и другие документы (`.pdf`, `.docx` и т.д.)
+- Видео из галереи телефона (`.mp4`) — MAX Bot не отправляет их как VIDEO
+
+## Sample Webhook Body — AUDIO Message (голосовое сообщение)
+
+```json
+{
+    "id": 14558985601,
+    "subject": "ednapulse_prodbot",
+    "subjectId": 13556,
+    "subscriber": {"id": 176469628, "identifier": "194089586"},
+    "userInfo": {"userName": null, "firstName": "Lyubov", "lastName": "", "avatarUrl": "https://files.mfms.ru/..."},
+    "messageContent": {
+        "type": "AUDIO",
+        "attachment": {
+            "url": "https://files.mfms.ru/imfiles4s/ednapulse_prodbot/XVh_RgEQSP-8QMhRYPWidQ.mpga?AWSAccessKeyId=imfiles4s&Expires=...&Signature=...",
+            "name": null,
+            "size": null
+        },
+        "location": null, "referral": null, "caption": null, "text": null,
+        "payload": null, "story": null, "items": null, "contact": null,
+        "product": null, "catalog": null, "order": null, "callPermissionReply": null
+    },
+    "receivedAt": "2026-04-28T17:27:31Z",
+    "replyOutMessageId": null, "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null, "lastMessage": null
+}
+```
+
+**Важно:** голосовые сообщения приходят с расширением `.mpga` (MPEG Audio). Тип `AUDIO` соответствует голосовым сообщениям, записанным прямо в мессенджере.
 
 ---
 
@@ -180,22 +227,22 @@ https://files.mfms.ru/imfiles4s/{channel}/{uuid}.{ext}?AWSAccessKeyId=...&Expire
 1. Parse JSON body.
 2. Determine `messageContent.type`.
 3. Для `TEXT`: извлечь `text`.
-4. Для `IMAGE`: извлечь `attachment.url`. Имя файла — из пути URL (`urlparse(url).path.split("/")[-1]`), т.к. `attachment.name` всегда null. Передать URL напрямую в `imconnector.send.messages` в параметр `files`.
+4. Для `IMAGE`, `DOCUMENT`, `AUDIO`, `VIDEO`, `VOICE`: извлечь `attachment.url`. Имя файла — из пути URL (`urlparse(url).path.split("/")[-1]`), т.к. `attachment.name` всегда null. Передать URL напрямую в `imconnector.send.messages` в параметр `files`.
 5. Use `subscriber.identifier` as the unique user identifier for routing in Bitrix24.
 
 ---
 
 ## Supported Types
 
-| Type     | Статус реализации |
-|----------|-------------------|
-| TEXT     | ✅ Реализован     |
-| IMAGE    | ✅ Реализован     |
-| VIDEO    | ⬜ Не реализован  |
-| AUDIO    | ⬜ Не реализован  |
-| VOICE    | ⬜ Не реализован  |
-| DOCUMENT | ⬜ Не реализован  |
-| LOCATION | ⬜ Не реализован  |
+| Type     | Статус реализации | Примечание |
+|----------|-------------------|------------|
+| TEXT     | ✅ Реализован     | |
+| IMAGE    | ✅ Реализован     | Включает видео, записанное в приложении (`.webp`) |
+| DOCUMENT | ✅ Реализован     | PDF, файлы и видео из галереи (`.mp4`) |
+| AUDIO    | ✅ Реализован     | Голосовые сообщения (`.mpga`) |
+| VIDEO    | ✅ Реализован     | На практике не наблюдался от MAX Bot |
+| VOICE    | ✅ Реализован     | На практике не наблюдался от MAX Bot |
+| LOCATION | ⬜ Не реализован  | Другая структура — нет `attachment`, есть `location` |
 
 ---
 

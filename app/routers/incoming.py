@@ -50,7 +50,9 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
     msg_content = data.get("messageContent", {})
     msg_type = msg_content.get("type")
 
-    if msg_type not in ("TEXT", "IMAGE"):
+    _ATTACHMENT_TYPES = {"IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "VOICE"}
+
+    if msg_type not in ("TEXT", *_ATTACHMENT_TYPES):
         logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
         return JSONResponse({"status": "ok"})
 
@@ -65,15 +67,15 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
     chat_id = subscriber_identifier
 
     try:
-        if msg_type == "IMAGE":
+        if msg_type in _ATTACHMENT_TYPES:
             attachment = msg_content.get("attachment") or {}
             file_url = attachment.get("url")
             if not file_url:
-                logger.warning("Incoming IMAGE: missing attachment.url")
+                logger.warning("Incoming %s: missing attachment.url", msg_type)
                 return JSONResponse({"status": "ok"})
 
             # name is null in edna payload — extract from URL path
-            file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "image.webp"
+            file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
             caption = msg_content.get("caption") or msg_content.get("text") or None
 
             await send_file_to_bitrix(
@@ -91,7 +93,7 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
                 channel_id=channel.id,
                 direction="incoming",
                 text=caption or file_name,
-                content_type="IMAGE",
+                content_type=msg_type,
                 max_message_id=msg_id,
                 subscriber_identifier=subscriber_identifier,
                 sent_at=datetime.utcnow(),
