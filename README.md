@@ -49,7 +49,11 @@ edna (сервер MAX Bot API)
 ### Поток входящего сообщения (клиент → оператор)
 1. edna присылает `POST /incoming` с вебхуком MAX Bot
 2. Приложение находит канал по `subject` (sender), получает `subscriber.identifier` (MAX ID)
-3. Вызывает `imconnector.send.messages` в Bitrix24 — сообщение появляется в Открытых линиях
+3. В зависимости от типа сообщения:
+   - **TEXT** — текст передаётся в Bitrix24 как есть
+   - **IMAGE, DOCUMENT, AUDIO, VIDEO, VOICE** — URL файла из edna передаётся напрямую в `imconnector.send.messages` через параметр `files`; файл скачивать не нужно, S3-ссылка живёт ~1 год
+   - **LOCATION** — координаты конвертируются в текст со ссылкой на Яндекс.Карты (Bitrix24 не поддерживает геолокацию как отдельный тип)
+4. Вызывает `imconnector.send.messages` в Bitrix24 — сообщение появляется в Открытых линиях
 
 ### Поток исходящего сообщения (оператор → клиент)
 1. Bitrix24 присылает `POST /handler` с событием `OnImConnectorMessageAdd`
