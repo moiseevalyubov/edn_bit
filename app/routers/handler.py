@@ -2,12 +2,13 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.models import Channel, Message, Portal
 from app.services.bitrix import send_delivery_status
@@ -189,13 +190,17 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             continue
 
         if file_info:
-            file_url = file_info.get("downloadLink") or file_info.get("link", "")
+            bitrix_url = file_info.get("downloadLink") or file_info.get("link", "")
             file_name = file_info.get("name", "")
             mime = file_info.get("mime", "")
 
-            if not file_url or not file_name:
+            if not bitrix_url or not file_name:
                 logger.warning("File attachment missing link or name, skipping: %s", file_info)
                 continue
+
+            # Wrap in proxy URL so edna sees a proper file extension
+            file_url = f"{settings.app_base_url}/file/{quote(file_name)}?dl={quote(bitrix_url)}"
+            logger.info("Proxy URL for edna: %s", file_url)
 
             max_type = _detect_media_type(mime, file_name)
             caption = text if text else None  # text becomes caption for media
