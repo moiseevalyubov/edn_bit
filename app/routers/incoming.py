@@ -22,7 +22,8 @@ async def incoming_verify():
 @router.post("/incoming")
 async def incoming(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
-    logger.info("Incoming MAX Bot webhook: %s", body[:500])
+    # TODO: диагностика — логируем полное тело для всех типов, потом вернуть body[:500]
+    logger.info("Incoming MAX Bot webhook: %s", body)
 
     try:
         data = json.loads(body)
@@ -47,8 +48,9 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"status": "ok"})
 
     msg_content = data.get("messageContent", {})
+    # TODO: диагностика — логируем не-TEXT вместо пропуска, потом вернуть ранний выход
     if msg_content.get("type") != "TEXT":
-        logger.info("Incoming: non-TEXT message type %s, skipping", msg_content.get("type"))
+        logger.info("Incoming: non-TEXT message type=%s full_payload=%s", msg_content.get("type"), body)
         return JSONResponse({"status": "ok"})
 
     text = msg_content.get("text") or ""
