@@ -11,10 +11,28 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Channel, Message, Portal
 from app.services.bitrix import send_delivery_status
-from app.services.maxbot import send_message
+from app.services.maxbot import send_media, send_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _detect_media_type(content_type: str, filename: str) -> str:
+    ct = (content_type or "").lower()
+    if ct.startswith("image/"):
+        return "IMAGE"
+    if ct.startswith("video/"):
+        return "VIDEO"
+    if ct.startswith("audio/"):
+        return "AUDIO"
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if ext in {"jpg", "jpeg", "png", "gif", "webp", "bmp"}:
+        return "IMAGE"
+    if ext in {"mp4", "avi", "mov", "mkv", "webm"}:
+        return "VIDEO"
+    if ext in {"mp3", "ogg", "wav", "aac", "m4a"}:
+        return "AUDIO"
+    return "DOCUMENT"
 
 
 def strip_bbcode(text: str) -> str:
@@ -114,12 +132,12 @@ async def handler(request: Request, db: Session = Depends(get_db)):
     update_portal_tokens(portal, auth, db)
 
     if event == "ONIMCONNECTORMESSAGEADD":
-        _handle_outgoing_message(data, portal, db)
+        await _handle_outgoing_message(data, portal, db)
 
     return JSONResponse({"status": "ok"})
 
 
-def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
+async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
     messages = data.get("data", {}).get("MESSAGES", [])
     line_id = data.get("data", {}).get("LINE")
     logger.info("_handle_outgoing_message: portal=%s, messages_count=%d, line_id=%s",
@@ -138,8 +156,17 @@ def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
         if not chat_id:
             logger.warning("Skipping msg: chat_id is empty")
             continue
-        if not text:
-            logger.warning("Skipping msg: text is empty after BBCode strip (raw=%r)", raw_text[:200])
+
+        # Extract file attachment from Bitrix24 payload
+        file_params = msg.get("message", {}).get("params", {})
+        file_info = file_params.get("FILE")  # None if no attachment
+
+        # Log full params when non-empty (helps verify actual format on first production hit)
+        if file_params:
+            logger.info("Message params: %s", file_params)
+
+        if not text and not file_info:
+            logger.warning("Skipping msg: no text and no attachment (raw=%r)", raw_text[:200])
             continue
 
         # Find active channel by subscriber_identifier (= chat_id)
@@ -162,9 +189,53 @@ def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
             logger.warning("No active channel for portal %s, chat %s", portal.member_id, chat_id)
             continue
 
+        if file_info:
+            file_url = file_info.get("LINK") or file_info.get("link", "")
+            file_name = file_info.get("NAME") or file_info.get("name", "")
+            file_content_type = file_info.get("CONTENT_TYPE") or file_info.get("type", "")
+
+            if not file_url or not file_name:
+                logger.warning("File attachment missing LINK or NAME, skipping: %s", file_info)
+                continue
+
+            max_type = _detect_media_type(file_content_type, file_name)
+            caption = text if text else None  # text becomes caption for media
+
+            try:
+                result = await send_media(
+                    api_key=channel.api_key,
+                    sender=channel.sender,
+                    max_id=chat_id,
+                    content_type=max_type,
+                    url=file_url,
+                    name=file_name,
+                    caption=caption,
+                )
+                logger.info("edna media response: %s", result)
+                db.add(Message(
+                    channel_id=channel.id,
+                    direction="outgoing",
+                    text=caption or file_name,
+                    content_type=max_type,
+                    bitrix_chat_id=str(im_chat_id) if im_chat_id else None,
+                    subscriber_identifier=chat_id,
+                    sent_at=datetime.utcnow(),
+                    raw_payload=str(data)[:2000],
+                ))
+                db.commit()
+                if im_chat_id and im_message_id and line_id:
+                    try:
+                        await send_delivery_status(portal=portal, db=db, line_id=int(line_id),
+                            bitrix_chat_id=int(im_chat_id), bitrix_message_id=int(im_message_id), chat_id=chat_id)
+                    except Exception as e:
+                        logger.warning("Delivery status error: %s", e)
+            except Exception as e:
+                logger.error("Failed to send media to MAX Bot: %s", e)
+            continue  # done with this message, skip the text branch below
+
         logger.info("Sending to edna: sender=%s, max_id=%s, text=%r", channel.sender, chat_id, text[:100])
         try:
-            result = send_message(
+            result = await send_message(
                 api_key=channel.api_key,
                 sender=channel.sender,
                 max_id=chat_id,
@@ -188,7 +259,7 @@ def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
 
             if im_chat_id and im_message_id and line_id:
                 try:
-                    send_delivery_status(
+                    await send_delivery_status(
                         portal=portal,
                         db=db,
                         line_id=int(line_id),

@@ -72,8 +72,8 @@ async def install(request: Request, db: Session = Depends(get_db)):
     db.refresh(portal)
 
     try:
-        register_connector(portal, db)
-        bind_events(portal, db)
+        await register_connector(portal, db)
+        await bind_events(portal, db)
     except Exception as e:
         logger.warning("Post-install setup error (non-critical): %s", e)
 

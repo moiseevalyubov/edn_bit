@@ -1,4 +1,6 @@
+import ipaddress
 import logging
+import re
 from datetime import datetime
 from typing import List
 
@@ -48,21 +50,21 @@ def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/open-lines")
-def list_open_lines(member_id: str, db: Session = Depends(get_db)):
+async def list_open_lines(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
     try:
-        lines = get_open_lines(portal, db)
+        lines = await get_open_lines(portal, db)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка получения линий из Битрикс24: {e}")
     return {"lines": lines, "current_line_id": portal.open_line_id}
 
 
 @router.post("/open-lines/create")
-def create_line(member_id: str, db: Session = Depends(get_db)):
+async def create_line(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
     try:
-        line_id = create_open_line(portal, db, "MAX Bot")
-        activate_connector(portal, db, line_id)
+        line_id = await create_open_line(portal, db, "MAX Bot")
+        await activate_connector(portal, db, line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")
     portal.open_line_id = line_id
@@ -71,10 +73,10 @@ def create_line(member_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/portal/open-line")
-def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
+async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
     portal = get_portal_or_404(body.member_id, db)
     try:
-        activate_connector(portal, db, body.line_id)
+        await activate_connector(portal, db, body.line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка активации коннектора: {e}")
     portal.open_line_id = body.line_id
@@ -83,11 +85,21 @@ def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
 
 
 @router.post("/portal/repair-endpoint")
-def repair_endpoint(body: dict, db: Session = Depends(get_db)):
+async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
     member_id = body.get("member_id", "")
     domain = body.get("domain", "")
     if not member_id or not domain:
         raise HTTPException(status_code=400, detail="member_id и domain обязательны")
+    if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9\-\.]{0,252}[a-zA-Z0-9]", domain):
+        raise HTTPException(status_code=400, detail="Недопустимое значение domain")
+    bare = domain.split(":")[0].lower()
+    if bare == "localhost" or bare.endswith(".local"):
+        raise HTTPException(status_code=400, detail="Недопустимое значение domain")
+    try:
+        ipaddress.ip_address(bare)
+        raise HTTPException(status_code=400, detail="Недопустимое значение domain")
+    except ValueError:
+        pass
     portal = db.query(Portal).filter_by(member_id=member_id).first()
     if not portal:
         raise HTTPException(status_code=404, detail="Портал не найден")
@@ -96,8 +108,8 @@ def repair_endpoint(body: dict, db: Session = Depends(get_db)):
         db.commit()
         logger.info("Repaired client_endpoint for %s: %s", member_id, portal.client_endpoint)
     try:
-        register_connector(portal, db)
-        bind_events(portal, db)
+        await register_connector(portal, db)
+        await bind_events(portal, db)
         logger.info("Re-registered connector and events for %s", member_id)
     except Exception as e:
         logger.warning("Re-registration failed (non-critical): %s", e)

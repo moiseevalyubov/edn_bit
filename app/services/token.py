@@ -15,18 +15,22 @@ def is_token_expired(portal: Portal) -> bool:
     return datetime.utcnow() >= portal.token_expires_at - timedelta(minutes=5)
 
 
-def refresh_token(portal: Portal, db: Session) -> Portal:
-    response = httpx.post(
-        OAUTH_URL,
-        params={
-            "grant_type": "refresh_token",
-            "client_id": settings.bitrix_client_id,
-            "client_secret": settings.bitrix_client_secret,
-            "refresh_token": portal.refresh_token,
-        },
-    )
+async def refresh_token(portal: Portal, db: Session) -> Portal:
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            OAUTH_URL,
+            data={
+                "grant_type": "refresh_token",
+                "client_id": settings.bitrix_client_id,
+                "client_secret": settings.bitrix_client_secret,
+                "refresh_token": portal.refresh_token,
+            },
+        )
     response.raise_for_status()
     data = response.json()
+
+    if "error" in data:
+        raise RuntimeError(f"Token refresh failed: {data['error']} — {data.get('error_description', '')}")
 
     portal.access_token = data["access_token"]
     portal.refresh_token = data["refresh_token"]
@@ -38,7 +42,7 @@ def refresh_token(portal: Portal, db: Session) -> Portal:
     return portal
 
 
-def get_valid_token(portal: Portal, db: Session) -> str:
+async def get_valid_token(portal: Portal, db: Session) -> str:
     if is_token_expired(portal):
-        portal = refresh_token(portal, db)
+        portal = await refresh_token(portal, db)
     return portal.access_token

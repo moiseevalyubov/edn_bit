@@ -12,18 +12,21 @@ logger = logging.getLogger(__name__)
 CONNECTOR_ID = "max_bot"
 
 
-def call_bitrix(portal: Portal, db: Session, method: str, params: dict) -> dict:
-    token = get_valid_token(portal, db)
+async def call_bitrix(portal: Portal, db: Session, method: str, params: dict) -> dict:
+    if not portal.client_endpoint:
+        raise ValueError(f"Portal {portal.domain!r} has no client_endpoint set")
+    token = await get_valid_token(portal, db)
     url = f"{portal.client_endpoint}{method}"
-    response = httpx.post(url, json={**params, "auth": token}, timeout=10)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, json={**params, "auth": token}, timeout=10)
     if not response.is_success:
         logger.error("Bitrix24 API error [%s %s]: %s", response.status_code, method, response.text[:500])
     response.raise_for_status()
     return response.json()
 
 
-def register_connector(portal: Portal, db: Session) -> None:
-    call_bitrix(
+async def register_connector(portal: Portal, db: Session) -> None:
+    await call_bitrix(
         portal,
         db,
         "imconnector.register",
@@ -45,28 +48,32 @@ def register_connector(portal: Portal, db: Session) -> None:
     )
 
 
-def bind_events(portal: Portal, db: Session) -> None:
-    handler_url = f"{settings.app_base_url}/handler"
+async def bind_events(portal: Portal, db: Session) -> None:
     if not settings.app_base_url:
-        logger.error("APP_BASE_URL is not set — event handler URL will be invalid: %r", handler_url)
-    else:
-        logger.info("Binding events with handler_url=%s", handler_url)
+        logger.error("APP_BASE_URL is not set — cannot bind events")
+        return
+    handler_url = f"{settings.app_base_url}/handler"
+    logger.info("Binding events with handler_url=%s", handler_url)
     for event in [
         "OnImConnectorMessageAdd",
         "OnImConnectorDialogStart",
         "OnImConnectorDialogFinish",
     ]:
-        call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})
-        logger.info("Bound event %s → %s", event, handler_url)
+        try:
+            await call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})
+            logger.info("Bound event %s → %s", event, handler_url)
+        except Exception:
+            logger.exception("Failed to bind event %s — portal may be in partial state", event)
+            raise
 
 
-def get_open_lines(portal: Portal, db: Session) -> list:
-    result = call_bitrix(portal, db, "imopenlines.config.list.get", {})
+async def get_open_lines(portal: Portal, db: Session) -> list:
+    result = await call_bitrix(portal, db, "imopenlines.config.list.get", {})
     return result.get("result", [])
 
 
-def create_open_line(portal: Portal, db: Session, name: str) -> str:
-    result = call_bitrix(
+async def create_open_line(portal: Portal, db: Session, name: str) -> str:
+    result = await call_bitrix(
         portal,
         db,
         "imopenlines.config.add",
@@ -78,8 +85,8 @@ def create_open_line(portal: Portal, db: Session, name: str) -> str:
     return line_id
 
 
-def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
-    call_bitrix(
+async def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
+    await call_bitrix(
         portal,
         db,
         "imconnector.activate",
@@ -87,7 +94,7 @@ def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
     )
 
 
-def send_message_to_bitrix(
+async def send_message_to_bitrix(
     portal: Portal,
     db: Session,
     chat_id: str,
@@ -97,7 +104,7 @@ def send_message_to_bitrix(
     msg_id: str,
 ) -> dict:
     line_id = portal.open_line_id or "0"
-    result = call_bitrix(
+    result = await call_bitrix(
         portal,
         db,
         "imconnector.send.messages",
@@ -124,7 +131,7 @@ def send_message_to_bitrix(
     return result
 
 
-def send_delivery_status(
+async def send_delivery_status(
     portal: Portal,
     db: Session,
     line_id: int,
@@ -132,7 +139,7 @@ def send_delivery_status(
     bitrix_message_id: int,
     chat_id: str,
 ) -> None:
-    call_bitrix(
+    await call_bitrix(
         portal,
         db,
         "imconnector.send.status.delivery",

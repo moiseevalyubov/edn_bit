@@ -66,7 +66,7 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
     chat_id = subscriber_identifier  # use identifier as chat.id
 
     try:
-        send_message_to_bitrix(
+        await send_message_to_bitrix(
             portal=portal,
             db=db,
             chat_id=chat_id,
