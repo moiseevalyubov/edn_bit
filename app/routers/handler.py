@@ -2,7 +2,9 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs
+
+import httpx
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -12,6 +14,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Channel, Message, Portal
 from app.services.bitrix import send_delivery_status
+from app.services.file_cache import store as cache_file
 from app.services.maxbot import send_media, send_message
 
 logger = logging.getLogger(__name__)
@@ -198,9 +201,19 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
                 logger.warning("File attachment missing link or name, skipping: %s", file_info)
                 continue
 
-            # Wrap in proxy URL so edna sees a proper file extension
-            file_url = f"{settings.app_base_url}/file/{quote(file_name)}?dl={quote(bitrix_url)}"
-            logger.info("Proxy URL for edna: %s", file_url)
+            # Download file from Bitrix immediately while the SIGN is fresh
+            ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else "bin"
+            try:
+                async with httpx.AsyncClient(follow_redirects=True) as client:
+                    bitrix_resp = await client.get(bitrix_url, timeout=30)
+                bitrix_resp.raise_for_status()
+            except Exception as e:
+                logger.error("Failed to download file from Bitrix: %s", e)
+                continue
+
+            file_key = cache_file(bitrix_resp.content, bitrix_resp.headers.get("content-type", "application/octet-stream"), ext)
+            file_url = f"{settings.app_base_url}/file/{file_key}"
+            logger.info("Cached file for edna: %s (%d bytes)", file_url, len(bitrix_resp.content))
 
             max_type = _detect_media_type(mime, file_name)
             caption = text if text else None  # text becomes caption for media
