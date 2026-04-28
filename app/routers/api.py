@@ -24,13 +24,6 @@ def get_portal_or_404(member_id: str, db: Session) -> Portal:
     return portal
 
 
-@router.get("/debug/channels")
-def debug_channels(member_id: str, db: Session = Depends(get_db)):
-    portal = get_portal_or_404(member_id, db)
-    channels = db.query(Channel).filter_by(portal_id=portal.id).all()
-    return [{"id": c.id, "name": c.name, "sender": c.sender, "api_key": c.api_key, "is_active": c.is_active} for c in channels]
-
-
 @router.get("/channels", response_model=List[ChannelResponse])
 def list_channels(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
