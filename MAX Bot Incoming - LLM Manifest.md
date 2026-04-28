@@ -67,30 +67,50 @@
 
 ## MessageContent Object
 
-| Field                                                                                            | Type        | Description                                                         |
-| ------------------------------------------------------------------------------------------------ | ----------- | ------------------------------------------------------------------- |
-| `type`                                                                                           | string      | Message type (TEXT) |
-| `text`                                                                                           | string/null | Текст сообщения                  |
+| Field        | Type        | Description                                      |
+|--------------|-------------|--------------------------------------------------|
+| `type`       | string      | Message type: `TEXT`, `IMAGE` (others possible)  |
+| `text`       | string/null | Текст сообщения (для TEXT)                       |
+| `attachment` | object/null | Файл или медиа (для IMAGE и других медиатипов)   |
+| `caption`    | string/null | Подпись к медиа (может быть null даже для IMAGE) |
+| `location`   | object/null | Геолокация (для LOCATION)                        |
+| `referral`   | object/null | Реферальные данные                               |
+| `payload`    | string/null | Payload кнопки/команды                           |
+| `story`      | object/null | Story reply                                      |
+| `items`      | array/null  | Список элементов                                 |
+| `contact`    | object/null | Контакт пользователя                             |
+| `product`    | object/null | Продукт                                          |
+| `catalog`    | object/null | Каталог                                          |
+| `order`      | object/null | Заказ                                            |
+| `callPermissionReply` | object/null | Ответ на запрос звонка                  |
 
+## Attachment Object (для type=IMAGE и других медиатипов)
+
+| Field  | Type        | Description                                              |
+|--------|-------------|----------------------------------------------------------|
+| `url`  | string      | Подписанный S3 URL файла. Срок действия ~1 год от отправки. Публично доступен. |
+| `name` | string/null | Имя файла. **На практике всегда null** — извлекать из пути URL. |
+| `size` | integer/null | Размер файла в байтах. На практике null.                |
+
+**Важно об URL:** это подписанный AWS S3 URL вида:
+```
+https://files.mfms.ru/imfiles4s/{channel}/{uuid}.{ext}?AWSAccessKeyId=...&Expires=...&Signature=...
+```
+Расширение файла содержится в пути (`.webp`, `.jpg` и т.д.). Для получения имени файла: `urlparse(url).path.split("/")[-1]`.
+
+Срок действия подписи (~1 год) достаточен для того, чтобы передать URL напрямую в Bitrix24 — Bitrix скачает файл сам. Скачивать файл на своём сервере не нужно (см. AD-7 в DECISIONS.md).
 
 ---
 
 ## Sample Webhook Body — TEXT Message
 
+```json
 {
     "id": 101,
     "subject": "test_subject_WA",
     "subjectId": 345,
-    "subscriber": {
-        "id": 202,
-        "identifier": "79000000000"
-    },
-    "userInfo": {
-        "userName": "alex",
-        "firstName": null,
-        "lastName": null,
-        "avatarUrl": null
-    },
+    "subscriber": {"id": 202, "identifier": "79000000000"},
+    "userInfo": {"userName": "alex", "firstName": null, "lastName": null, "avatarUrl": null},
     "messageContent": {
         "type": "TEXT",
         "attachment": null,
@@ -99,14 +119,57 @@
         "text": "Спасибо за помощь",
         "payload": null,
         "story": null,
-        "items": null
+        "items": null,
+        "contact": null,
+        "product": null,
+        "catalog": null,
+        "order": null,
+        "callPermissionReply": null
     },
     "receivedAt": "2022-04-29T15:30:08Z",
     "replyOutMessageId": 5043874,
     "replyOutMessageExternalRequestId": "2c2dd5f1-5ad8-449d-9c38-b6bdf288f1e5",
-    "replyInMessageId": null
+    "replyInMessageId": null,
+    "lastMessage": null
 }
+```
 
+## Sample Webhook Body — IMAGE Message
+
+```json
+{
+    "id": 14558923001,
+    "subject": "ednapulse_prodbot",
+    "subjectId": 13556,
+    "subscriber": {"id": 176469628, "identifier": "194089586"},
+    "userInfo": {"userName": null, "firstName": "Lyubov", "lastName": "", "avatarUrl": "https://files.mfms.ru/..."},
+    "messageContent": {
+        "type": "IMAGE",
+        "attachment": {
+            "url": "https://files.mfms.ru/imfiles4s/ednapulse_prodbot/Q8PJu5KqTCCbMvPjm9KG9g.webp?AWSAccessKeyId=imfiles4s&Expires=1778001117&Signature=...",
+            "name": null,
+            "size": null
+        },
+        "location": null,
+        "referral": null,
+        "caption": null,
+        "text": null,
+        "payload": null,
+        "story": null,
+        "items": null,
+        "contact": null,
+        "product": null,
+        "catalog": null,
+        "order": null,
+        "callPermissionReply": null
+    },
+    "receivedAt": "2026-04-28T17:11:57Z",
+    "replyOutMessageId": null,
+    "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null,
+    "lastMessage": null
+}
+```
 
 ---
 
@@ -116,9 +179,23 @@
 
 1. Parse JSON body.
 2. Determine `messageContent.type`.
-3. Extract `text` if present (for TEXT messages).
-4. Use `subscriber.identifier` as the unique user identifier for routing in Bitrix24.
-5. If the user quoted another message, use `replyOutMessageId` or `replyOutMessageExternalRequestId` for reference.
+3. Для `TEXT`: извлечь `text`.
+4. Для `IMAGE`: извлечь `attachment.url`. Имя файла — из пути URL (`urlparse(url).path.split("/")[-1]`), т.к. `attachment.name` всегда null. Передать URL напрямую в `imconnector.send.messages` в параметр `files`.
+5. Use `subscriber.identifier` as the unique user identifier for routing in Bitrix24.
+
+---
+
+## Supported Types
+
+| Type     | Статус реализации |
+|----------|-------------------|
+| TEXT     | ✅ Реализован     |
+| IMAGE    | ✅ Реализован     |
+| VIDEO    | ⬜ Не реализован  |
+| AUDIO    | ⬜ Не реализован  |
+| VOICE    | ⬜ Не реализован  |
+| DOCUMENT | ⬜ Не реализован  |
+| LOCATION | ⬜ Не реализован  |
 
 ---
 
@@ -126,11 +203,7 @@
 
 * Expect POST webhook — no query parameters.
 * This webhook is not an API request you call — it is **delivered to your server**.
-* Always handle `messageContent.text` only when `type = TEXT`.
-* Other fields (attachments, interactive objects, flows, orders) may appear but are optional.
-
----
-
-## Notes
-
-* For non‑TEXT types, clients may include structures like items, product, order, or location. Handle only TEXT for MVP. 
+* For `TEXT`: handle `messageContent.text`.
+* For `IMAGE`: handle `messageContent.attachment.url`. Name is always null — extract from URL path.
+* `attachment.url` is a long-lived signed S3 URL — pass directly to Bitrix24, no need to proxy.
+* For unsupported types: log and return 200 OK without processing.

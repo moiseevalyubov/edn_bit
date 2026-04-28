@@ -88,3 +88,15 @@ Best available assumption: `msg["message"]["params"]["FILE"]` with subfields `LI
 ### AD-6: settings_page.py requires no changes
 
 Makes no calls to any bitrix service function. Excluded from Task #4 scope.
+
+### AD-7: Incoming IMAGE from MAX Bot — pass edna S3 URL directly to Bitrix24 (no download)
+
+**Context:** When a MAX Bot user sends an image, edna delivers a signed S3 URL in `messageContent.attachment.url`. Two options were considered:
+- **A (chosen):** Pass the S3 URL directly in `imconnector.send.messages` `files` parameter. Bitrix24 downloads the file itself.
+- **B (rejected):** Download the file immediately, store in `file_cache`, serve via `/file/{key}`.
+
+**Why A:** The edna S3 URL expiry (`Expires` param) is ~1 year from message receipt. Bitrix24 downloads the file quickly after receiving the webhook — expiry is not a concern. Option B was designed for Bitrix24 outgoing URLs whose SIGN expires in seconds; that problem does not exist here.
+
+**Why B was rejected:** Unnecessary memory usage and latency. The file_cache pattern was invented for a different constraint.
+
+**Caveat:** If edna ever shortens S3 URL TTL to minutes/seconds, this decision must be revisited and Option B implemented for incoming media.

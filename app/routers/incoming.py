@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import datetime
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Channel, Message, Portal
-from app.services.bitrix import send_message_to_bitrix
+from app.services.bitrix import send_file_to_bitrix, send_message_to_bitrix
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -22,8 +23,7 @@ async def incoming_verify():
 @router.post("/incoming")
 async def incoming(request: Request, db: Session = Depends(get_db)):
     body = await request.body()
-    # TODO: диагностика — логируем полное тело для всех типов, потом вернуть body[:500]
-    logger.info("Incoming MAX Bot webhook: %s", body)
+    logger.info("Incoming MAX Bot webhook: %s", body[:500])
 
     try:
         data = json.loads(body)
@@ -48,13 +48,10 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
         return JSONResponse({"status": "ok"})
 
     msg_content = data.get("messageContent", {})
-    # TODO: диагностика — логируем не-TEXT вместо пропуска, потом вернуть ранний выход
-    if msg_content.get("type") != "TEXT":
-        logger.info("Incoming: non-TEXT message type=%s full_payload=%s", msg_content.get("type"), body)
-        return JSONResponse({"status": "ok"})
+    msg_type = msg_content.get("type")
 
-    text = msg_content.get("text") or ""
-    if not text:
+    if msg_type not in ("TEXT", "IMAGE"):
+        logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
         return JSONResponse({"status": "ok"})
 
     subscriber = data.get("subscriber", {})
@@ -65,21 +62,58 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
     user_name = user_info.get("userName") or user_info.get("firstName") or subscriber_identifier
 
     msg_id = str(data.get("id", ""))
-    chat_id = subscriber_identifier  # use identifier as chat.id
+    chat_id = subscriber_identifier
 
     try:
-        await send_message_to_bitrix(
-            portal=portal,
-            db=db,
-            chat_id=chat_id,
-            user_id=subscriber_id or subscriber_identifier,
-            user_name=user_name,
-            text=text,
-            msg_id=msg_id,
-        )
+        if msg_type == "IMAGE":
+            attachment = msg_content.get("attachment") or {}
+            file_url = attachment.get("url")
+            if not file_url:
+                logger.warning("Incoming IMAGE: missing attachment.url")
+                return JSONResponse({"status": "ok"})
 
-        db.add(
-            Message(
+            # name is null in edna payload — extract from URL path
+            file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "image.webp"
+            caption = msg_content.get("caption") or msg_content.get("text") or None
+
+            await send_file_to_bitrix(
+                portal=portal,
+                db=db,
+                chat_id=chat_id,
+                user_id=subscriber_id or subscriber_identifier,
+                user_name=user_name,
+                msg_id=msg_id,
+                file_url=file_url,
+                file_name=file_name,
+                caption=caption,
+            )
+            db.add(Message(
+                channel_id=channel.id,
+                direction="incoming",
+                text=caption or file_name,
+                content_type="IMAGE",
+                max_message_id=msg_id,
+                subscriber_identifier=subscriber_identifier,
+                sent_at=datetime.utcnow(),
+                raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
+            ))
+            db.commit()
+
+        else:  # TEXT
+            text = msg_content.get("text") or ""
+            if not text:
+                return JSONResponse({"status": "ok"})
+
+            await send_message_to_bitrix(
+                portal=portal,
+                db=db,
+                chat_id=chat_id,
+                user_id=subscriber_id or subscriber_identifier,
+                user_name=user_name,
+                text=text,
+                msg_id=msg_id,
+            )
+            db.add(Message(
                 channel_id=channel.id,
                 direction="incoming",
                 text=text,
@@ -88,9 +122,8 @@ async def incoming(request: Request, db: Session = Depends(get_db)):
                 subscriber_identifier=subscriber_identifier,
                 sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
-            )
-        )
-        db.commit()
+            ))
+            db.commit()
 
     except Exception as e:
         logger.error("Failed to forward to Bitrix24: %s", e)

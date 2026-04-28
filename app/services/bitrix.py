@@ -131,6 +131,48 @@ async def send_message_to_bitrix(
     return result
 
 
+async def send_file_to_bitrix(
+    portal: Portal,
+    db: Session,
+    chat_id: str,
+    user_id: str,
+    user_name: str,
+    msg_id: str,
+    file_url: str,
+    file_name: str,
+    caption: str | None = None,
+) -> dict:
+    line_id = portal.open_line_id or "0"
+    message: dict = {
+        "id": msg_id,
+        "date": int(time.time()),
+        "files": [{"url": file_url, "name": file_name}],
+    }
+    if caption:
+        message["text"] = caption
+    result = await call_bitrix(
+        portal,
+        db,
+        "imconnector.send.messages",
+        {
+            "CONNECTOR": CONNECTOR_ID,
+            "LINE": int(line_id),
+            "MESSAGES": [
+                {
+                    "user": {
+                        "id": user_id,
+                        "name": user_name,
+                        "skip_phone_validate": "Y",
+                    },
+                    "message": message,
+                    "chat": {"id": chat_id},
+                }
+            ],
+        },
+    )
+    return result
+
+
 async def send_delivery_status(
     portal: Portal,
     db: Session,
