@@ -32,7 +32,7 @@ async def send_media(api_key: str, sender: str, max_id: str, content_type: str, 
         raise ValueError(f"Invalid content_type '{content_type}'. Must be one of {VALID_MEDIA_TYPES}")
     if not url or not name:
         raise ValueError("url and name must be non-empty strings")
-    content = {"type": content_type, "url": url, "name": name}
+    content = {"type": content_type, "url": url}
     if caption is not None:
         content["caption"] = caption
     return await _post(api_key, sender, max_id, content)
