@@ -58,6 +58,7 @@ async def bind_events(portal: Portal, db: Session) -> None:
         "OnImConnectorMessageAdd",
         "OnImConnectorDialogStart",
         "OnImConnectorDialogFinish",
+        "OnAppUninstall",
     ]:
         try:
             await call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})

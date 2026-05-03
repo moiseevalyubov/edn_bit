@@ -43,6 +43,8 @@ async def refresh_token(portal: Portal, db: Session) -> Portal:
 
 
 async def get_valid_token(portal: Portal, db: Session) -> str:
+    if portal.uninstalled_at is not None:
+        raise RuntimeError(f"Portal {portal.member_id} has been uninstalled — refusing token refresh")
     if is_token_expired(portal):
         portal = await refresh_token(portal, db)
     return portal.access_token

@@ -140,10 +140,31 @@ async def handler(request: Request, db: Session = Depends(get_db)):
     # Refresh tokens from event
     update_portal_tokens(portal, auth, db)
 
+    # Ignore events for uninstalled portals, except OnAppUninstall itself
+    if portal.uninstalled_at is not None and event != "ONAPPUNINSTALL":
+        logger.info("Ignoring event %s for uninstalled portal %s", event, member_id)
+        return JSONResponse({"status": "ok"})
+
     if event == "ONIMCONNECTORMESSAGEADD":
         await _handle_outgoing_message(data, portal, db)
+    elif event == "ONAPPUNINSTALL":
+        await _handle_app_uninstall(portal, db)
 
     return JSONResponse({"status": "ok"})
+
+
+async def _handle_app_uninstall(portal: Portal, db: Session) -> None:
+    logger.info("App uninstalled from portal %s — marking as uninstalled", portal.member_id)
+    deactivated = 0
+    for channel in portal.channels:
+        if channel.is_active:
+            channel.is_active = False
+            channel.disconnected_at = datetime.utcnow()
+            deactivated += 1
+    portal.uninstalled_at = datetime.utcnow()
+    db.commit()
+    logger.info("Portal %s marked as uninstalled, %d channels deactivated",
+                portal.member_id, deactivated)
 
 
 async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> None:
