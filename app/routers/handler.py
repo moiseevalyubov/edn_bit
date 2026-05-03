@@ -7,7 +7,7 @@ from urllib.parse import parse_qs
 import httpx
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -88,6 +88,11 @@ def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
     if auth.get("client_endpoint"):
         portal.client_endpoint = auth["client_endpoint"]
     db.commit()
+
+
+@router.head("/handler")
+async def handler_head():
+    return Response(status_code=200)
 
 
 @router.get("/handler")

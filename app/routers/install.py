@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -11,6 +11,11 @@ from app.services.bitrix import bind_events, register_connector
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.head("/install")
+async def install_head():
+    return Response(status_code=200)
 
 
 @router.post("/install")
