@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Portal
 
-OAUTH_URL = "https://oauth.bitrix.info/oauth/token/"
+OAUTH_URL = "https://oauth.bitrix24.tech/oauth/token/"
 
 
 def is_token_expired(portal: Portal) -> bool:
