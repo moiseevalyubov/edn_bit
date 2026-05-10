@@ -332,9 +332,16 @@ function disconnect(channelId) {
 
 function copyWebhook() {
   var url = document.getElementById('webhookUrl').textContent;
-  navigator.clipboard.writeText(url).then(function() {
-    alert('URL скопирован');
-  });
+  var ta = document.createElement('textarea');
+  ta.value = url;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+  alert('URL скопирован');
 }
 
 function setLoading(on) {
