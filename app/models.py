@@ -55,3 +55,11 @@ class Message(Base):
     raw_payload = Column(Text, nullable=True)
 
     channel = relationship("Channel", back_populates="messages")
+
+
+class SeenEvent(Base):
+    __tablename__ = "seen_events"
+
+    id = Column(Integer, primary_key=True)
+    fingerprint = Column(String(64), unique=True, nullable=False, index=True)
+    seen_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

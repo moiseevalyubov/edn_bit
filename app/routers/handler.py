@@ -1,5 +1,7 @@
+import hashlib
 import json
 import logging
+import random
 import re
 from datetime import datetime, timedelta
 from urllib.parse import parse_qs
@@ -12,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import Channel, Message, Portal
+from app.models import Channel, Message, Portal, SeenEvent
 from app.services.bitrix import send_delivery_status
 from app.services.file_cache import store as cache_file
 from app.services.maxbot import send_media, send_message
@@ -132,10 +134,30 @@ async def handler(request: Request, db: Session = Depends(get_db)):
         logger.warning("Handler: unknown portal %s", member_id)
         return JSONResponse({"status": "ok"})
 
-    # Verify application token
-    if portal.app_token and app_token and portal.app_token != app_token:
-        logger.warning("Handler: token mismatch for portal %s", member_id)
+    # SEC-2: always verify application_token when the portal has one stored
+    if portal.app_token:
+        if not app_token or portal.app_token != app_token:
+            logger.warning("Handler: token mismatch for portal %s", member_id)
+            return JSONResponse({"status": "ok"})
+    else:
+        logger.warning("Handler: portal %s has no app_token stored — skipping token check", member_id)
+
+    # SEC-2: anti-replay — reject requests with a fingerprint seen in the last 10 minutes
+    fingerprint = hashlib.sha256(body).hexdigest()
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    if db.query(SeenEvent).filter(
+        SeenEvent.fingerprint == fingerprint,
+        SeenEvent.seen_at >= cutoff,
+    ).first():
+        logger.warning("Handler: duplicate event rejected (replay) for portal %s", member_id)
         return JSONResponse({"status": "ok"})
+    db.add(SeenEvent(fingerprint=fingerprint))
+    db.commit()
+
+    # Probabilistic cleanup to keep seen_events table small (~1% of requests)
+    if random.random() < 0.01:
+        db.query(SeenEvent).filter(SeenEvent.seen_at < cutoff).delete()
+        db.commit()
 
     # Refresh tokens from event
     update_portal_tokens(portal, auth, db)

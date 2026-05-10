@@ -39,6 +39,16 @@ with engine.connect() as _conn:
         _conn.rollback()
         logger.warning("Migration webhook_token backfill skipped: %s", _e)
 
+# SEC-2: cleanup stale anti-replay fingerprints at startup
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("DELETE FROM seen_events WHERE seen_at < now() - interval '1 hour'"))
+        _conn.commit()
+        logger.info("Migration: cleaned up stale seen_events")
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Cleanup seen_events skipped: %s", _e)
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:
