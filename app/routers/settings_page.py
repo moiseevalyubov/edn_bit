@@ -79,6 +79,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <div class="mb-3">
           <label class="form-label">Название канала</label>
           <input type="text" class="form-control" id="channelName" placeholder="Например: MAX Bot продажи">
+          <div id="nameError" class="text-danger small mt-1 d-none"></div>
         </div>
         <div class="mb-3">
           <label class="form-label">API-ключ (X-API-KEY)</label>
@@ -87,6 +88,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <div class="mb-3">
           <label class="form-label">Sender ID</label>
           <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала MAX Bot">
+          <div id="senderError" class="text-danger small mt-1 d-none"></div>
         </div>
         <button class="btn btn-primary" id="saveBtn" onclick="saveChannel()">
           <span id="saveBtnText">Подключить</span>
@@ -285,13 +287,15 @@ function saveChannel() {
   var apiKey = document.getElementById('apiKey').value.trim();
   var sender = document.getElementById('sender').value.trim();
 
+  clearFieldErrors();
+  document.getElementById('formError').classList.add('d-none');
+
   if (!name || !apiKey || !sender) {
     showFormError('Заполните все поля');
     return;
   }
 
   setLoading(true);
-  document.getElementById('formError').classList.add('d-none');
 
   fetch('/api/channels', {
     method: 'POST',
@@ -299,7 +303,15 @@ function saveChannel() {
     body: JSON.stringify({member_id: memberId, name: name, api_key: apiKey, sender: sender})
   })
   .then(function(r) {
-    if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка сохранения'); });
+    if (!r.ok) return r.json().then(function(data) {
+      var detail = data.detail;
+      if (detail && typeof detail === 'object' && detail.field) {
+        var err = new Error(detail.message);
+        err.field = detail.field;
+        throw err;
+      }
+      throw new Error(typeof detail === 'string' ? detail : 'Ошибка сохранения');
+    });
     return r.json();
   })
   .then(function(data) {
@@ -314,7 +326,11 @@ function saveChannel() {
   })
   .catch(function(e) {
     setLoading(false);
-    showFormError(e.message);
+    if (e.field) {
+      showFieldError(e.field === 'sender' ? 'senderError' : 'nameError', e.message);
+    } else {
+      showFormError(e.message);
+    }
   });
 }
 
@@ -356,6 +372,20 @@ function showFormError(msg) {
   var el = document.getElementById('formError');
   el.textContent = msg;
   el.classList.remove('d-none');
+}
+
+function showFieldError(elId, msg) {
+  var el = document.getElementById(elId);
+  el.textContent = msg;
+  el.classList.remove('d-none');
+}
+
+function clearFieldErrors() {
+  ['nameError', 'senderError'].forEach(function(id) {
+    var el = document.getElementById(id);
+    el.textContent = '';
+    el.classList.add('d-none');
+  });
 }
 
 function esc(s) {

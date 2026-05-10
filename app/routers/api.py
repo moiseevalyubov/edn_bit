@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -33,6 +34,19 @@ def list_channels(member_id: str, db: Session = Depends(get_db)):
 @router.post("/channels", response_model=ChannelSaveResponse)
 def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     portal = get_portal_or_404(body.member_id, db)
+
+    duplicate_sender = db.query(Channel).filter_by(
+        portal_id=portal.id, sender=body.sender, is_active=True
+    ).first()
+    if duplicate_sender:
+        raise HTTPException(status_code=422, detail={"field": "sender", "message": "Вы уже подключили этот канал"})
+
+    duplicate_name = db.query(Channel).filter(
+        Channel.portal_id == portal.id,
+        func.lower(Channel.name) == body.name.strip().lower()
+    ).first()
+    if duplicate_name:
+        raise HTTPException(status_code=422, detail={"field": "name", "message": "Название должно быть уникальным"})
 
     channel = Channel(
         portal_id=portal.id,
