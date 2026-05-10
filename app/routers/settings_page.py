@@ -102,6 +102,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <p class="text-muted small mb-2">Скопируйте этот URL и укажите его как webhook на сервере MAX Bot:</p>
         <div class="webhook-box" id="webhookUrl"></div>
         <button class="btn btn-outline-secondary btn-sm mt-2" onclick="copyWebhook()">Скопировать</button>
+        <span id="copyConfirm" class="text-success ms-2 small" style="display:none">Ссылка скопирована</span>
       </div>
     </div>
   </div>
@@ -341,7 +342,9 @@ function copyWebhook() {
   ta.select();
   document.execCommand('copy');
   document.body.removeChild(ta);
-  alert('URL скопирован');
+  var confirm = document.getElementById('copyConfirm');
+  confirm.style.display = 'inline';
+  setTimeout(function() { confirm.style.display = 'none'; }, 5000);
 }
 
 function setLoading(on) {
