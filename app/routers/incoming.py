@@ -16,7 +16,8 @@ router = APIRouter()
 
 
 @router.api_route("/incoming", methods=["GET", "HEAD"])
-async def incoming_verify():
+@router.api_route("/incoming/{webhook_token}", methods=["GET", "HEAD"])
+async def incoming_verify(webhook_token: str = ""):
     return JSONResponse({"status": "ok"})
 
 
