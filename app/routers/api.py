@@ -1,6 +1,7 @@
 import ipaddress
 import logging
 import re
+import uuid
 from datetime import datetime
 from typing import List
 
@@ -53,13 +54,14 @@ def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
         name=body.name,
         api_key=body.api_key,
         sender=body.sender,
+        webhook_token=uuid.uuid4().hex,
         is_active=True,
     )
     db.add(channel)
     db.commit()
     db.refresh(channel)
 
-    webhook_url = f"{settings.app_base_url}/incoming"
+    webhook_url = f"{settings.app_base_url}/incoming/{channel.webhook_token}"
     return ChannelSaveResponse(channel=ChannelResponse.model_validate(channel), webhook_url=webhook_url)
 
 

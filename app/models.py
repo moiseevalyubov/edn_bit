@@ -31,6 +31,7 @@ class Channel(Base):
     name = Column(String, nullable=False)
     api_key = Column(String, nullable=False)
     sender = Column(String, nullable=False)
+    webhook_token = Column(String, nullable=True, unique=True, index=True)
     connected_at = Column(DateTime, default=datetime.utcnow)
     disconnected_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)

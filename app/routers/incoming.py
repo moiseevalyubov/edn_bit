@@ -20,26 +20,20 @@ async def incoming_verify():
     return JSONResponse({"status": "ok"})
 
 
-@router.post("/incoming")
-async def incoming(request: Request, db: Session = Depends(get_db)):
+@router.post("/incoming/{webhook_token}")
+async def incoming(webhook_token: str, request: Request, db: Session = Depends(get_db)):
+    channel = db.query(Channel).filter_by(webhook_token=webhook_token, is_active=True).first()
+    if not channel:
+        logger.warning("Incoming: invalid webhook token %s", webhook_token[:8] + "...")
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+
     body = await request.body()
-    logger.info("Incoming MAX Bot webhook: %s", body[:500])
+    logger.info("Incoming MAX Bot webhook (channel %s): %s", channel.id, body[:500])
 
     try:
         data = json.loads(body)
     except Exception:
         logger.error("Incoming: failed to parse JSON body")
-        return JSONResponse({"status": "ok"})
-
-    # Find channel by sender (subject in webhook = sender identifier)
-    sender = data.get("subject")
-    if not sender:
-        logger.warning("Incoming: missing subject field")
-        return JSONResponse({"status": "ok"})
-
-    channel = db.query(Channel).filter_by(sender=sender, is_active=True).first()
-    if not channel:
-        logger.warning("Incoming: no active channel for sender %s", sender)
         return JSONResponse({"status": "ok"})
 
     portal: Portal = channel.portal

@@ -16,6 +16,29 @@ logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
+# SEC-1: backfill webhook_token for channels created before this field existed
+from sqlalchemy import text
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("ALTER TABLE channels ADD COLUMN webhook_token TEXT"))
+        _conn.commit()
+        logger.info("Migration: added webhook_token column")
+    except Exception:
+        _conn.rollback()
+    try:
+        _conn.execute(text(
+            "UPDATE channels SET webhook_token = replace(gen_random_uuid()::TEXT, '-', '') "
+            "WHERE webhook_token IS NULL"
+        ))
+        _conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_channels_webhook_token ON channels(webhook_token)"
+        ))
+        _conn.commit()
+        logger.info("Migration: backfilled webhook_token for existing channels")
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Migration webhook_token backfill skipped: %s", _e)
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:
