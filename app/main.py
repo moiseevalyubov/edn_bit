@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
+logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
+
 if settings.app_base_url:
     logger.info("APP_BASE_URL configured: %s", settings.app_base_url)
 else:
