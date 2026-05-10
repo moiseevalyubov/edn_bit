@@ -303,34 +303,29 @@ function saveChannel() {
     body: JSON.stringify({member_id: memberId, name: name, api_key: apiKey, sender: sender})
   })
   .then(function(r) {
-    if (!r.ok) return r.json().then(function(data) {
-      var detail = data.detail;
-      if (detail && typeof detail === 'object' && detail.field) {
-        var err = new Error(detail.message);
-        err.field = detail.field;
-        throw err;
+    return r.json().then(function(data) {
+      if (!r.ok) {
+        setLoading(false);
+        var detail = data.detail;
+        if (detail && typeof detail === 'object' && detail.field) {
+          showFieldError(detail.field === 'sender' ? 'senderError' : 'nameError', detail.message);
+        } else {
+          showFormError(typeof detail === 'string' ? detail : 'Ошибка сохранения');
+        }
+        return;
       }
-      throw new Error(typeof detail === 'string' ? detail : 'Ошибка сохранения');
+      setLoading(false);
+      document.getElementById('channelName').value = '';
+      document.getElementById('apiKey').value = '';
+      document.getElementById('sender').value = '';
+      document.getElementById('webhookUrl').textContent = data.webhook_url;
+      document.getElementById('webhookBlock').classList.remove('d-none');
+      loadChannels();
     });
-    return r.json();
   })
-  .then(function(data) {
+  .catch(function() {
     setLoading(false);
-    document.getElementById('channelName').value = '';
-    document.getElementById('apiKey').value = '';
-    document.getElementById('sender').value = '';
-
-    document.getElementById('webhookUrl').textContent = data.webhook_url;
-    document.getElementById('webhookBlock').classList.remove('d-none');
-    loadChannels();
-  })
-  .catch(function(e) {
-    setLoading(false);
-    if (e.field) {
-      showFieldError(e.field === 'sender' ? 'senderError' : 'nameError', e.message);
-    } else {
-      showFormError(e.message);
-    }
+    showFormError('Ошибка сети');
   });
 }
 
