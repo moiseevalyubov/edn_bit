@@ -259,7 +259,7 @@ function renderChannels(channels) {
   var emptyRow = document.getElementById('emptyRow');
   var rows = [];
 
-  channels.forEach(function(ch) {
+  channels.forEach(function(ch, idx) {
     var date = new Date(ch.connected_at).toLocaleDateString('ru-RU');
     var badge = ch.is_active
       ? '<span class="badge badge-active rounded-pill">Активен</span>'
@@ -267,7 +267,8 @@ function renderChannels(channels) {
     var btn = ch.is_active
       ? '<button class="btn btn-outline-danger btn-sm" onclick="disconnect(' + ch.id + ')">Отключить</button>'
       : '';
-    rows.push('<tr>' +
+    var hiddenAttr = idx >= 3 ? ' class="channel-hidden" style="display:none"' : '';
+    rows.push('<tr' + hiddenAttr + '>' +
       '<td>' + esc(ch.name) + '</td>' +
       '<td class="font-monospace">' + esc(ch.sender) + '</td>' +
       '<td>' + date + '</td>' +
@@ -278,8 +279,23 @@ function renderChannels(channels) {
 
   if (rows.length) {
     emptyRow.style.display = 'none';
-    tbody.innerHTML = rows.join('') + emptyRow.outerHTML;
+    var html = rows.join('');
+    if (channels.length > 3) {
+      html += '<tr id="showAllRow"><td colspan="5" class="text-center py-2">' +
+        '<button class="btn btn-link btn-sm p-0" onclick="showAllChannels()">' +
+        'Все каналы (' + channels.length + ')' +
+        '</button></td></tr>';
+    }
+    tbody.innerHTML = html + emptyRow.outerHTML;
   }
+}
+
+function showAllChannels() {
+  document.querySelectorAll('#channelsList .channel-hidden').forEach(function(el) {
+    el.style.display = '';
+  });
+  var row = document.getElementById('showAllRow');
+  if (row) row.style.display = 'none';
 }
 
 function saveChannel() {
