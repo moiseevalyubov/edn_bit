@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Channel, Message, Portal
 from app.services.bitrix import send_file_to_bitrix, send_message_to_bitrix
-from app.services.file_validator import check_extension
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -84,24 +83,6 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             # name is null in edna payload — extract from URL path
             file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
             caption = msg_content.get("caption") or msg_content.get("text") or None
-
-            # SEC-5: block dangerous file extensions
-            ext_error = check_extension(file_name)
-            if ext_error:
-                logger.warning("Incoming file blocked (channel %s): %s", channel.id, ext_error)
-                try:
-                    await send_message_to_bitrix(
-                        portal=portal,
-                        db=db,
-                        chat_id=chat_id,
-                        user_id=subscriber_id or subscriber_identifier,
-                        user_name=user_name,
-                        text=ext_error,
-                        msg_id=msg_id,
-                    )
-                except Exception as e:
-                    logger.error("Failed to send block notification to Bitrix24: %s", e)
-                return JSONResponse({"status": "ok"})
 
             await send_file_to_bitrix(
                 portal=portal,
