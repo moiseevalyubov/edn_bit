@@ -17,7 +17,7 @@ from app.database import get_db
 from app.models import Channel, Message, Portal, SeenEvent
 from app.services.bitrix import send_delivery_status
 from app.services.file_cache import make_signed_url, store as cache_file
-from app.services.file_validator import check_extension, check_size
+from app.services.file_validator import check_size
 from app.services.maxbot import send_media, send_message
 
 logger = logging.getLogger(__name__)
@@ -248,16 +248,6 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
 
             if not bitrix_url or not file_name:
                 logger.warning("File attachment missing link or name, skipping: %s", file_info)
-                continue
-
-            # SEC-5: block dangerous extensions before downloading
-            ext_error = check_extension(file_name)
-            if ext_error:
-                logger.warning("Outgoing file blocked (channel %d): %s", channel.id, ext_error)
-                try:
-                    await send_message(api_key=channel.api_key, sender=channel.sender, max_id=chat_id, text=ext_error)
-                except Exception as e:
-                    logger.error("Failed to send block notification to MAX Bot: %s", e)
                 continue
 
             # Download file from Bitrix immediately while the SIGN is fresh
