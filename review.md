@@ -334,18 +334,18 @@ SQLite не выдержит параллельных запросов от не
 
 ---
 
-### SEC-6. Нет rate limiting
+### ✅ ИСПРАВЛЕНО — SEC-6. Нет rate limiting
 
-**Файлы:** `app/routers/incoming.py`, `app/routers/handler.py`
+**Файлы:** `app/services/rate_limiter.py`, `app/routers/incoming.py`, `app/routers/handler.py`
 
-Эндпоинты `/incoming` и `/handler` не имеют ограничений на количество запросов. Один злоумышленник может перегрузить сервис.
+**Что сделано:** in-memory sliding window rate limiter (50 req/sec).
 
-**Решение:**
-- `/incoming` — 30 req/sec на канал
-- `/handler` — 50 req/sec на портал
-- При превышении — `429 Too Many Requests`
+- `/incoming/{webhook_token}` — 50 req/sec **на канал** (ключ: `webhook_token`), проверка до DB lookup
+- `/handler` — 50 req/sec **на портал** (ключ: `member_id`), проверка после извлечения `member_id` из тела запроса
+- При превышении → `429 {"error": "too_many_requests"}`
+- GET/HEAD на `/incoming` (пинги верификации edna) не ограничиваются
 
-Реализовать через `slowapi` или middleware.
+**Архитектурное решение:** чистый in-memory sliding window без внешних зависимостей. slowapi не используется — для `/handler` ключ находится в теле запроса, что несовместимо с `key_func` slowapi без дублирования логики парсинга тела в middleware.
 
 ---
 
