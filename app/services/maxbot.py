@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
     payload = {"sender": sender, "maxId": max_id, "content": content}
-    logger.info("edna request payload: %s", payload)
+    logger.info("edna request: sender=%s maxId=%s type=%s", sender, max_id, content.get("type"))
     async with httpx.AsyncClient() as client:
         response = await client.post(
             MAXBOT_API_URL,

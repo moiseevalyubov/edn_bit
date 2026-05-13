@@ -34,7 +34,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
     body = await request.body()
-    logger.info("Incoming MAX Bot webhook (channel %s): %s", channel.id, body[:500])
+    logger.info("Incoming MAX Bot webhook (channel %s, %d bytes)", channel.id, len(body))
 
     try:
         data = json.loads(body)

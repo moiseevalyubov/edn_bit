@@ -28,7 +28,6 @@ async def install(request: Request, db: Session = Depends(get_db)):
         params = dict(request.query_params)
 
     logger.info("Install params keys: %s", list(params.keys()))
-    logger.info("Install params: %s", {k: v for k, v in params.items() if "token" not in k.lower() and "secret" not in k.lower()})
 
     member_id = params.get("member_id") or params.get("MEMBER_ID")
     access_token = params.get("AUTH_ID")

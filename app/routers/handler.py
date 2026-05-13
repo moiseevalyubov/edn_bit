@@ -118,11 +118,10 @@ async def handler(request: Request, db: Session = Depends(get_db)):
     elif "multipart/form-data" in content_type:
         return RedirectResponse("/settings", status_code=303)
     else:
-        logger.info("Handler received: %s", body[:500])
         try:
             data = json.loads(body)
         except Exception:
-            logger.error("Handler: failed to parse body (content-type=%s): %s", content_type, body[:200])
+            logger.error("Handler: failed to parse body (content-type=%s)", content_type)
             return JSONResponse({"status": "ok"})
 
     event = data.get("event", "").upper()
