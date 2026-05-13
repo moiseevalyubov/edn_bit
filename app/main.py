@@ -39,6 +39,20 @@ with engine.connect() as _conn:
         _conn.rollback()
         logger.warning("Migration webhook_token backfill skipped: %s", _e)
 
+# REL-3: unique index to prevent duplicate incoming messages (edna retries)
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_incoming_dedup "
+            "ON messages(channel_id, direction, max_message_id) "
+            "WHERE max_message_id IS NOT NULL"
+        ))
+        _conn.commit()
+        logger.info("Migration: added dedup index on messages")
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Migration messages dedup index skipped: %s", _e)
+
 # SEC-2: cleanup stale anti-replay fingerprints at startup
 with engine.connect() as _conn:
     try:

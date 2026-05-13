@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -61,6 +62,16 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     msg_id = str(data.get("id", ""))
     chat_id = subscriber_identifier
 
+    if msg_id:
+        existing = db.query(Message).filter_by(
+            channel_id=channel.id,
+            direction="incoming",
+            max_message_id=msg_id,
+        ).first()
+        if existing:
+            logger.info("Incoming: duplicate message id=%s, skipping", msg_id)
+            return JSONResponse({"status": "ok"})
+
     try:
         if msg_type in _ATTACHMENT_TYPES:
             attachment = msg_content.get("attachment") or {}
@@ -94,7 +105,12 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
             ))
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+                return JSONResponse({"status": "ok"})
 
         elif msg_type == "LOCATION":
             loc = msg_content.get("location") or {}
@@ -127,7 +143,12 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
             ))
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+                return JSONResponse({"status": "ok"})
 
         else:  # TEXT
             text = msg_content.get("text") or ""
@@ -153,7 +174,12 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
             ))
-            db.commit()
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+                return JSONResponse({"status": "ok"})
 
     except Exception as e:
         logger.error("Failed to forward to Bitrix24: %s", e)
