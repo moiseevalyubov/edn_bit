@@ -63,6 +63,38 @@ with engine.connect() as _conn:
         _conn.rollback()
         logger.warning("Cleanup seen_events skipped: %s", _e)
 
+# SEC-3: encrypt plaintext tokens/keys that exist before this migration
+from app.crypto import encrypt as _encrypt, is_encrypted as _is_encrypted
+
+try:
+    with engine.begin() as _conn:
+        _conn.execute(text("SELECT pg_advisory_xact_lock(20260514)"))
+        _migrated = 0
+        for _row in _conn.execute(text("SELECT id, access_token, refresh_token FROM portals")).fetchall():
+            _updates = {}
+            if _row.access_token and not _is_encrypted(_row.access_token):
+                _updates["access_token"] = _encrypt(_row.access_token)
+            if _row.refresh_token and not _is_encrypted(_row.refresh_token):
+                _updates["refresh_token"] = _encrypt(_row.refresh_token)
+            if _updates:
+                _set = ", ".join(f"{k} = :{k}" for k in _updates)
+                _updates["id"] = _row.id
+                _conn.execute(text(f"UPDATE portals SET {_set} WHERE id = :id"), _updates)
+                _migrated += 1
+        for _row in _conn.execute(text("SELECT id, api_key FROM channels")).fetchall():
+            if _row.api_key and not _is_encrypted(_row.api_key):
+                _conn.execute(
+                    text("UPDATE channels SET api_key = :api_key WHERE id = :id"),
+                    {"api_key": _encrypt(_row.api_key), "id": _row.id},
+                )
+                _migrated += 1
+        if _migrated:
+            logger.info("Migration SEC-3: encrypted %d plaintext records", _migrated)
+        else:
+            logger.info("Migration SEC-3: all records already encrypted")
+except Exception as _e:
+    logger.warning("Migration SEC-3 skipped: %s", _e)
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:

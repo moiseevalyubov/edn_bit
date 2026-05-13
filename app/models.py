@@ -1,9 +1,27 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import types
 from sqlalchemy.orm import relationship
 
 from app.database import Base
+
+
+class EncryptedString(types.TypeDecorator):
+    impl = types.Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        from app.crypto import encrypt
+        return encrypt(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        from app.crypto import decrypt
+        return decrypt(value)
 
 
 class Portal(Base):
@@ -12,8 +30,8 @@ class Portal(Base):
     id = Column(Integer, primary_key=True)
     member_id = Column(String, unique=True, nullable=False, index=True)
     client_endpoint = Column(String, nullable=False)
-    access_token = Column(String, nullable=False)
-    refresh_token = Column(String, nullable=False)
+    access_token = Column(EncryptedString, nullable=False)
+    refresh_token = Column(EncryptedString, nullable=False)
     token_expires_at = Column(DateTime, nullable=True)
     app_token = Column(String, nullable=True)
     open_line_id = Column(String, nullable=True)
@@ -29,7 +47,7 @@ class Channel(Base):
     id = Column(Integer, primary_key=True)
     portal_id = Column(Integer, ForeignKey("portals.id"), nullable=False)
     name = Column(String, nullable=False)
-    api_key = Column(String, nullable=False)
+    api_key = Column(EncryptedString, nullable=False)
     sender = Column(String, nullable=False)
     webhook_token = Column(String, nullable=True, unique=True, index=True)
     connected_at = Column(DateTime, default=datetime.utcnow)
