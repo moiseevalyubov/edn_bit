@@ -16,7 +16,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Channel, Message, Portal, SeenEvent
 from app.services.bitrix import send_delivery_status
-from app.services.file_cache import store as cache_file
+from app.services.file_cache import make_signed_url, store as cache_file
 from app.services.maxbot import send_media, send_message
 
 logger = logging.getLogger(__name__)
@@ -260,7 +260,7 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
                 continue
 
             file_key = cache_file(bitrix_resp.content, bitrix_resp.headers.get("content-type", "application/octet-stream"), ext)
-            file_url = f"{settings.app_base_url}/file/{file_key}"
+            file_url = make_signed_url(file_key)
             logger.info("Cached file for edna: %s (%d bytes)", file_url, len(bitrix_resp.content))
 
             max_type = _detect_media_type(mime, file_name)
