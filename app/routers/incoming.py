@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Channel, Message, Portal
 from app.services.bitrix import send_file_to_bitrix, send_message_to_bitrix
+from app.services.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -24,6 +25,9 @@ async def incoming_verify(webhook_token: str = ""):
 
 @router.post("/incoming/{webhook_token}")
 async def incoming(webhook_token: str, request: Request, db: Session = Depends(get_db)):
+    if not rate_limiter.is_allowed(f"in:{webhook_token}"):
+        return JSONResponse({"error": "too_many_requests"}, status_code=429)
+
     channel = db.query(Channel).filter_by(webhook_token=webhook_token, is_active=True).first()
     if not channel:
         logger.warning("Incoming: invalid webhook token %s", webhook_token[:8] + "...")

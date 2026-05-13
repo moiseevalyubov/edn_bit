@@ -18,6 +18,7 @@ from app.models import Channel, Message, Portal, SeenEvent
 from app.services.bitrix import send_delivery_status
 from app.services.file_cache import make_signed_url, store as cache_file
 from app.services.maxbot import send_media, send_message
+from app.services.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -128,6 +129,9 @@ async def handler(request: Request, db: Session = Depends(get_db)):
     auth = data.get("auth", {})
     member_id = auth.get("member_id")
     app_token = auth.get("application_token")
+
+    if member_id and not rate_limiter.is_allowed(f"h:{member_id}"):
+        return JSONResponse({"error": "too_many_requests"}, status_code=429)
 
     portal = db.query(Portal).filter_by(member_id=member_id).first()
     if not portal:
