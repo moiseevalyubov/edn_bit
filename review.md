@@ -436,7 +436,7 @@ HTTP → HTTPS редирект обеспечивается Render на уро�
 
 ---
 
-### ✅ ИСПРАВЛЕНО — REL-1. Retry с exponential backoff
+### ✅ ИСПРАВЛЕНО (не протестировано) — REL-1. Retry с exponential backoff
 
 **Файлы:** `app/services/delivery_worker.py`
 
@@ -452,7 +452,7 @@ HTTP → HTTPS редирект обеспечивается Render на уро�
 
 ---
 
-### ✅ ИСПРАВЛЕНО — REL-2. `/incoming` возвращает 200 только если задача сохранена
+### ✅ ИСПРАВЛЕНО (не протестировано) — REL-2. `/incoming` возвращает 200 только если задача сохранена
 
 **Файл:** `app/routers/incoming.py`
 
@@ -480,7 +480,7 @@ HTTP → HTTPS редирект обеспечивается Render на уро�
 
 ---
 
-### ✅ ИСПРАВЛЕНО — REL-4. Очередь сообщений с persistence в PostgreSQL
+### ✅ ИСПРАВЛЕНО (не протестировано) — REL-4. Очередь сообщений с persistence в PostgreSQL
 
 **Файлы:** `app/models.py`, `app/services/delivery_worker.py`, `app/routers/incoming.py`, `app/routers/handler.py`, `app/main.py`
 
