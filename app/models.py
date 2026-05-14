@@ -82,3 +82,20 @@ class SeenEvent(Base):
     id = Column(Integer, primary_key=True)
     fingerprint = Column(String(64), unique=True, nullable=False, index=True)
     seen_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class MessageDeliveryTask(Base):
+    __tablename__ = "message_delivery_tasks"
+
+    id = Column(Integer, primary_key=True)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False)
+    task_type = Column(String, nullable=False)   # "send_to_bitrix" | "send_to_edna"
+    direction = Column(String, nullable=False)    # "incoming" | "outgoing"
+    payload = Column(Text, nullable=False)        # JSON string with all delivery params
+    status = Column(String, nullable=False, default="pending")  # pending|processing|sent|failed|dead
+    retry_count = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_error = Column(Text, nullable=True)
+    max_message_id = Column(String, nullable=True)  # for dedup on incoming tasks
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)

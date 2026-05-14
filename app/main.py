@@ -104,6 +104,20 @@ with engine.connect() as _conn:
     except Exception:
         _conn.rollback()
 
+# REL-4: dedup index for incoming delivery tasks (prevents duplicate enqueue on concurrent webhooks)
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_tasks_incoming_dedup "
+            "ON message_delivery_tasks(channel_id, max_message_id) "
+            "WHERE direction = 'incoming' AND max_message_id IS NOT NULL"
+        ))
+        _conn.commit()
+        logger.info("Migration REL-4: added dedup index on message_delivery_tasks")
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Migration REL-4 dedup index skipped: %s", _e)
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:
