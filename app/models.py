@@ -37,6 +37,7 @@ class Portal(Base):
     open_line_id = Column(String, nullable=True)
     installed_at = Column(DateTime, default=datetime.utcnow)
     uninstalled_at = Column(DateTime, nullable=True)
+    payment_required_at = Column(DateTime, nullable=True)
 
     channels = relationship("Channel", back_populates="portal")
 

@@ -95,6 +95,15 @@ try:
 except Exception as _e:
     logger.warning("Migration SEC-3 skipped: %s", _e)
 
+# T-2: add payment_required_at column for subscription expiry tracking
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("ALTER TABLE portals ADD COLUMN payment_required_at TIMESTAMP"))
+        _conn.commit()
+        logger.info("Migration T-2: added payment_required_at column to portals")
+    except Exception:
+        _conn.rollback()
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:

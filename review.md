@@ -78,24 +78,23 @@
 
 ---
 
-**T-2. Обработка ошибки `PAYMENT_REQUIRED`**
+**✅ ИСПРАВЛЕНО — T-2. Обработка ошибки `PAYMENT_REQUIRED`**
 
-Файл: `app/services/token.py`
+Файл: `app/services/token.py`, `app/models.py`, `app/main.py`
 
-При истёкшей подписке клиента Bitrix24 возвращает `{"error": "PAYMENT_REQUIRED"}` при обновлении токена. Сейчас `refresh_token()` в этом случае упадёт с `RuntimeError` и будет повторять попытки.
-
-Решение: перехватывать эту ошибку отдельно, логировать как "подписка истекла", помечать портал и не делать повторных попыток.
+**Что сделано:**
+- Добавлено поле `payment_required_at` в модель `Portal` (с миграцией в `main.py`)
+- Создан класс `PaymentRequiredError(RuntimeError)` — отдельное исключение для истёкшей подписки
+- В `refresh_token()`: при `{"error": "PAYMENT_REQUIRED"}` — сохраняет `payment_required_at`, логирует `"Portal X subscription expired"` и поднимает `PaymentRequiredError` (не `RuntimeError`)
+- В `get_valid_token()`: если `payment_required_at` уже выставлен — сразу поднимает `PaymentRequiredError` без попытки обновить токен
 
 ---
 
-**T-3. Исправить URL сервера авторизации**
+**✅ ИСПРАВЛЕНО — T-3. Исправить URL сервера авторизации**
 
 Файл: `app/services/token.py:9`
 
-Текущий URL: `https://oauth.bitrix.info/oauth/token/`
-Правильный по документации: `https://oauth.bitrix24.tech/oauth/token/`
-
-Старый адрес может работать через редирект, но нужно использовать официальный.
+`OAUTH_URL = "https://oauth.bitrix24.tech/oauth/token/"` — правильный URL уже установлен.
 
 ---
 

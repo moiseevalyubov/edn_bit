@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta
 
 import httpx
@@ -6,7 +7,13 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Portal
 
+logger = logging.getLogger(__name__)
+
 OAUTH_URL = "https://oauth.bitrix24.tech/oauth/token/"
+
+
+class PaymentRequiredError(RuntimeError):
+    """Raised when the portal's Bitrix24 subscription has expired."""
 
 
 def is_token_expired(portal: Portal) -> bool:
@@ -29,6 +36,12 @@ async def refresh_token(portal: Portal, db: Session) -> Portal:
     response.raise_for_status()
     data = response.json()
 
+    if data.get("error") == "PAYMENT_REQUIRED":
+        portal.payment_required_at = datetime.utcnow()
+        db.commit()
+        logger.warning("Portal %s subscription expired (PAYMENT_REQUIRED)", portal.member_id)
+        raise PaymentRequiredError(f"Portal {portal.member_id} subscription expired")
+
     if "error" in data:
         raise RuntimeError(f"Token refresh failed: {data['error']} — {data.get('error_description', '')}")
 
@@ -45,6 +58,8 @@ async def refresh_token(portal: Portal, db: Session) -> Portal:
 async def get_valid_token(portal: Portal, db: Session) -> str:
     if portal.uninstalled_at is not None:
         raise RuntimeError(f"Portal {portal.member_id} has been uninstalled — refusing token refresh")
+    if portal.payment_required_at is not None:
+        raise PaymentRequiredError(f"Portal {portal.member_id} subscription expired")
     if is_token_expired(portal):
         portal = await refresh_token(portal, db)
     return portal.access_token
