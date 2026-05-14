@@ -118,6 +118,7 @@ async def log_requests(request: Request, call_next):
     response = await call_next(request)
     duration = round((time.time() - start) * 1000)
     logger.info("%s %s → %d (%dms)", request.method, request.url.path, response.status_code, duration)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 
