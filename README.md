@@ -11,6 +11,7 @@
 | Документ | Для кого | Что внутри |
 |---|---|---|
 | **README.md** (этот файл) | Разработчики | Архитектура, как запустить, ключевые технические решения |
+| [docs/DEPLOY.md](docs/DEPLOY.md) | Команда деплоя | Компоненты, требования к серверу, пошаговая инструкция по развертыванию |
 | [docs/PRD.md](docs/PRD.md) | Все | Что делает продукт, кому нужен, что входит в MVP и что нет |
 | [docs/MVP.md](docs/MVP.md) | Продукт, менеджмент | Какую гипотезу проверяет MVP, метрики успеха |
 | [review.md](review.md) | Разработчики | Технический долг, открытые задачи и известные проблемы |
@@ -26,7 +27,7 @@
 
 ```
 Клиент MAX Bot
-     │  входящие сообщения (webhook POST /incoming)
+     │  входящие сообщения (webhook POST /incoming/{webhook_token})
      ▼
 edna (сервер MAX Bot API)
      │  исходящие через API POST /api/v1/out-messages/max-bot
@@ -34,14 +35,14 @@ edna (сервер MAX Bot API)
      │
  Это приложение (FastAPI)
      │
-     ├── GET/POST /handler   ← события Bitrix24 (OnImConnectorMessageAdd и др.)
-     ├── POST /incoming      ← входящие сообщения от edna/MAX Bot
-     ├── GET  /file/{key}    ← отдаёт предзакешированные файлы для edna
-     ├── GET  /settings      ← UI настроек (Jinja2 HTML)
-     └── /api/*              ← REST API для UI настроек
+     ├── GET/POST /handler                ← события Bitrix24 (OnImConnectorMessageAdd и др.)
+     ├── POST /incoming/{webhook_token}   ← входящие сообщения от edna/MAX Bot
+     ├── GET  /file/{uuid}.ext            ← отдаёт предзакешированные файлы для edna
+     ├── GET  /settings                   ← UI настроек (Jinja2 HTML)
+     └── /api/*                           ← REST API для UI настроек
      │
-     └── База данных (SQLite / PostgreSQL)
-              Portal → Channel → Message
+     └── База данных (PostgreSQL)
+              Portal → Channel → Message / SeenEvent
 ```
 
 ### Поток входящего сообщения (клиент → оператор)
@@ -142,8 +143,9 @@ review.md            # технический долг и открытые за�
 
 | Переменная | Обязательная | Описание |
 |---|---|---|
-| `APP_BASE_URL` | **Да** | Публичный URL сервера, напр. `https://myapp.onrender.com`. Используется для вебхуков и файлового кеша. Без неё события Bitrix работать не будут. |
+| `APP_BASE_URL` | **Да** | Публичный HTTPS-URL сервера, напр. `https://myapp.onrender.com`. Используется для вебхуков и файлового кеша. Без неё события Bitrix работать не будут. |
 | `DATABASE_URL` | **Да** | URL базы данных. Только PostgreSQL: `postgresql://user:pass@host/db`. SQLite не поддерживается — не выдерживает параллельных запросов от нескольких workers. |
+| `SECRET_KEY` | **Да** | Произвольная строка ≥32 символа. Шифрует токены и API-ключи в БД (Fernet). **Нельзя менять после первого запуска** — все зашифрованные данные станут нечитаемыми. Сгенерировать: `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `BITRIX_CLIENT_ID` | **Да** | Client ID приложения из маркетплейса Bitrix24. |
 | `BITRIX_CLIENT_SECRET` | **Да** | Client Secret приложения из маркетплейса Bitrix24. |
 
