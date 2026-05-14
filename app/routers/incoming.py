@@ -1,6 +1,5 @@
 import json
 import logging
-from datetime import datetime
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
@@ -9,8 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Channel, Message, Portal
-from app.services.bitrix import send_file_to_bitrix, send_message_to_bitrix
+from app.models import Channel, Message, MessageDeliveryTask, Portal
+from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         data = json.loads(body)
     except Exception:
         logger.error("Incoming: failed to parse JSON body")
-        return JSONResponse({"status": "ok"})
+        return JSONResponse({"error": "bad_request"}, status_code=400)
 
     portal: Portal = channel.portal
     if not portal:
@@ -67,125 +66,112 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     chat_id = subscriber_identifier
 
     if msg_id:
-        existing = db.query(Message).filter_by(
-            channel_id=channel.id,
-            direction="incoming",
-            max_message_id=msg_id,
-        ).first()
-        if existing:
-            logger.info("Incoming: duplicate message id=%s, skipping", msg_id)
+        # Dual dedup: check already-delivered (Message) and already-enqueued (MessageDeliveryTask)
+        if db.query(Message).filter_by(
+            channel_id=channel.id, direction="incoming", max_message_id=msg_id
+        ).first():
+            logger.info("Incoming: duplicate message id=%s (already delivered), skipping", msg_id)
+            return JSONResponse({"status": "ok"})
+        if db.query(MessageDeliveryTask).filter_by(
+            channel_id=channel.id, direction="incoming", max_message_id=msg_id
+        ).first():
+            logger.info("Incoming: duplicate message id=%s (already queued), skipping", msg_id)
             return JSONResponse({"status": "ok"})
 
-    try:
-        if msg_type in _ATTACHMENT_TYPES:
-            attachment = msg_content.get("attachment") or {}
-            file_url = attachment.get("url")
-            if not file_url:
-                logger.warning("Incoming %s: missing attachment.url", msg_type)
-                return JSONResponse({"status": "ok"})
+    if msg_type in _ATTACHMENT_TYPES:
+        attachment = msg_content.get("attachment") or {}
+        file_url = attachment.get("url")
+        if not file_url:
+            logger.warning("Incoming %s: missing attachment.url", msg_type)
+            return JSONResponse({"status": "ok"})
 
-            # name is null in edna payload — extract from URL path
-            file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
-            caption = msg_content.get("caption") or msg_content.get("text") or None
+        # name is null in edna payload — extract from URL path
+        file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
+        caption = msg_content.get("caption") or msg_content.get("text") or None
 
-            await send_file_to_bitrix(
-                portal=portal,
+        try:
+            enqueue_incoming(
                 db=db,
+                channel=channel,
+                msg_type="file",
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
                 msg_id=msg_id,
+                content_type=msg_type,
+                subscriber_identifier=subscriber_identifier,
+                raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
                 file_url=file_url,
                 file_name=file_name,
                 caption=caption,
             )
-            db.add(Message(
-                channel_id=channel.id,
-                direction="incoming",
-                text=caption or file_name,
-                content_type=msg_type,
-                max_message_id=msg_id,
-                subscriber_identifier=subscriber_identifier,
-                sent_at=datetime.utcnow(),
-                raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
-            ))
-            try:
-                db.commit()
-            except IntegrityError:
-                db.rollback()
-                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
-                return JSONResponse({"status": "ok"})
+        except IntegrityError:
+            db.rollback()
+            logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+            return JSONResponse({"status": "ok"})
+        except Exception as e:
+            logger.error("Incoming: failed to enqueue file message: %s", e)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
 
-        elif msg_type == "LOCATION":
-            loc = msg_content.get("location") or {}
-            lat = loc.get("latitude")
-            lon = loc.get("longitude")
-            if not lat or not lon:
-                logger.warning("Incoming LOCATION: missing coordinates")
-                return JSONResponse({"status": "ok"})
+    elif msg_type == "LOCATION":
+        loc = msg_content.get("location") or {}
+        lat = loc.get("latitude")
+        lon = loc.get("longitude")
+        if not lat or not lon:
+            logger.warning("Incoming LOCATION: missing coordinates")
+            return JSONResponse({"status": "ok"})
 
-            maps_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
-            address = loc.get("address")
-            text = f"📍 {address}\n{maps_url}" if address else f"📍 Местоположение: {maps_url}"
+        maps_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
+        address = loc.get("address")
+        text = f"📍 {address}\n{maps_url}" if address else f"📍 Местоположение: {maps_url}"
 
-            await send_message_to_bitrix(
-                portal=portal,
+        try:
+            enqueue_incoming(
                 db=db,
+                channel=channel,
+                msg_type="location",
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
-                text=text,
                 msg_id=msg_id,
-            )
-            db.add(Message(
-                channel_id=channel.id,
-                direction="incoming",
-                text=text,
                 content_type="LOCATION",
-                max_message_id=msg_id,
                 subscriber_identifier=subscriber_identifier,
-                sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
-            ))
-            try:
-                db.commit()
-            except IntegrityError:
-                db.rollback()
-                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
-                return JSONResponse({"status": "ok"})
+                text=text,
+            )
+        except IntegrityError:
+            db.rollback()
+            logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+            return JSONResponse({"status": "ok"})
+        except Exception as e:
+            logger.error("Incoming: failed to enqueue location message: %s", e)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
 
-        else:  # TEXT
-            text = msg_content.get("text") or ""
-            if not text:
-                return JSONResponse({"status": "ok"})
+    else:  # TEXT
+        text = msg_content.get("text") or ""
+        if not text:
+            return JSONResponse({"status": "ok"})
 
-            await send_message_to_bitrix(
-                portal=portal,
+        try:
+            enqueue_incoming(
                 db=db,
+                channel=channel,
+                msg_type="text",
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
-                text=text,
                 msg_id=msg_id,
-            )
-            db.add(Message(
-                channel_id=channel.id,
-                direction="incoming",
-                text=text,
                 content_type="TEXT",
-                max_message_id=msg_id,
                 subscriber_identifier=subscriber_identifier,
-                sent_at=datetime.utcnow(),
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
-            ))
-            try:
-                db.commit()
-            except IntegrityError:
-                db.rollback()
-                logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
-                return JSONResponse({"status": "ok"})
-
-    except Exception as e:
-        logger.error("Failed to forward to Bitrix24: %s", e)
+                text=text,
+            )
+        except IntegrityError:
+            db.rollback()
+            logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+            return JSONResponse({"status": "ok"})
+        except Exception as e:
+            logger.error("Incoming: failed to enqueue text message: %s", e)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
 
     return JSONResponse({"status": "ok"})
