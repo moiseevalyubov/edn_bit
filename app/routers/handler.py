@@ -15,9 +15,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.models import Channel, Message, Portal, SeenEvent
-from app.services.bitrix import send_delivery_status
-from app.services.file_cache import make_signed_url, store as cache_file
-from app.services.maxbot import send_media, send_message
+from app.services.delivery_worker import enqueue_outgoing
+from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
 
 logger = logging.getLogger(__name__)
@@ -264,80 +263,37 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
                 continue
 
             file_key = cache_file(bitrix_resp.content, bitrix_resp.headers.get("content-type", "application/octet-stream"), ext)
-            file_url = make_signed_url(file_key)
-            logger.info("Cached file for edna: %s (%d bytes)", file_url, len(bitrix_resp.content))
+            logger.info("Cached file for edna: key=%s (%d bytes)", file_key, len(bitrix_resp.content))
 
             max_type = _detect_media_type(mime, file_name)
-            caption = text if text else None  # text becomes caption for media
+            caption = text if text else None
 
-            try:
-                result = await send_media(
-                    api_key=channel.api_key,
-                    sender=channel.sender,
-                    max_id=chat_id,
-                    content_type=max_type,
-                    url=file_url,
-                    name=file_name,
-                    caption=caption,
-                )
-                logger.info("edna media response: %s", result)
-                db.add(Message(
-                    channel_id=channel.id,
-                    direction="outgoing",
-                    text=caption or file_name,
-                    content_type=max_type,
-                    bitrix_chat_id=str(im_chat_id) if im_chat_id else None,
-                    subscriber_identifier=chat_id,
-                    sent_at=datetime.utcnow(),
-                    raw_payload=str(data)[:2000],
-                ))
-                db.commit()
-                if im_chat_id and im_message_id and line_id:
-                    try:
-                        await send_delivery_status(portal=portal, db=db, line_id=int(line_id),
-                            bitrix_chat_id=int(im_chat_id), bitrix_message_id=int(im_message_id), chat_id=chat_id)
-                    except Exception as e:
-                        logger.warning("Delivery status error: %s", e)
-            except Exception as e:
-                logger.error("Failed to send media to MAX Bot: %s", e)
-            continue  # done with this message, skip the text branch below
-
-        logger.info("Sending to edna: sender=%s, max_id=%s, text=%r", channel.sender, chat_id, text[:100])
-        try:
-            result = await send_message(
-                api_key=channel.api_key,
-                sender=channel.sender,
+            enqueue_outgoing(
+                db=db,
+                channel=channel,
+                msg_type="media",
                 max_id=chat_id,
-                text=text,
+                raw_payload=str(data)[:2000],
+                im_chat_id=str(im_chat_id) if im_chat_id else None,
+                im_message_id=str(im_message_id) if im_message_id else None,
+                line_id=str(line_id) if line_id else None,
+                content_type=max_type,
+                file_key=file_key,
+                file_name=file_name,
+                caption=caption,
             )
-            logger.info("edna response: %s", result)
+            logger.info("Enqueued media task for chat_id=%s file=%s", chat_id, file_name)
+            continue
 
-            db.add(
-                Message(
-                    channel_id=channel.id,
-                    direction="outgoing",
-                    text=text,
-                    content_type="TEXT",
-                    bitrix_chat_id=str(im_chat_id) if im_chat_id else None,
-                    subscriber_identifier=chat_id,
-                    sent_at=datetime.utcnow(),
-                    raw_payload=str(data)[:2000],
-                )
-            )
-            db.commit()
-
-            if im_chat_id and im_message_id and line_id:
-                try:
-                    await send_delivery_status(
-                        portal=portal,
-                        db=db,
-                        line_id=int(line_id),
-                        bitrix_chat_id=int(im_chat_id),
-                        bitrix_message_id=int(im_message_id),
-                        chat_id=chat_id,
-                    )
-                except Exception as e:
-                    logger.warning("Delivery status error: %s", e)
-
-        except Exception as e:
-            logger.error("Failed to send to MAX Bot: %s", e)
+        enqueue_outgoing(
+            db=db,
+            channel=channel,
+            msg_type="text",
+            max_id=chat_id,
+            raw_payload=str(data)[:2000],
+            im_chat_id=str(im_chat_id) if im_chat_id else None,
+            im_message_id=str(im_message_id) if im_message_id else None,
+            line_id=str(line_id) if line_id else None,
+            text=text,
+        )
+        logger.info("Enqueued text task for chat_id=%s", chat_id)

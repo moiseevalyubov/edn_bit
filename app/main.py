@@ -156,3 +156,9 @@ app.include_router(settings_page.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.on_event("startup")
+async def startup():
+    from app.services.delivery_worker import start_worker
+    start_worker()
