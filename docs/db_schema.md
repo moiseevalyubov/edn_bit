@@ -1,6 +1,6 @@
 # Схема базы данных — MAX Bot Bitrix24 Connector
 
-## Четыре таблицы
+## Пять таблиц
 
 ### `portals` — порталы Bitrix24
 
@@ -71,10 +71,42 @@
 
 ---
 
+### `message_delivery_tasks` — очередь доставки сообщений
+
+Каждая запись — одна задача на доставку: либо входящее сообщение (MAX Bot → Bitrix24), либо исходящее (Bitrix24 → MAX Bot). Worker обрабатывает задачи по одной, обновляет статус и retry_count.
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `id` | Integer, PK | Внутренний ID |
+| `channel_id` | Integer, FK → channels | Через какой канал передаётся сообщение |
+| `task_type` | String | `send_to_bitrix` (входящее) или `send_to_edna` (исходящее) |
+| `direction` | String | `incoming` или `outgoing` — для дедупликации и фильтрации |
+| `payload` | Text | JSON со всеми параметрами доставки (текст, file_key, chat_id и т.д.) |
+| `status` | String | `pending` → `processing` → `sent` / `failed` / `dead` |
+| `retry_count` | Integer | Сколько попыток уже было (0 = ещё не пробовали) |
+| `next_attempt_at` | DateTime | Когда worker должен следующий раз попробовать |
+| `last_error` | Text | Последнее сообщение об ошибке (до 2000 символов) |
+| `max_message_id` | String | ID сообщения в MAX Bot — для дедупликации входящих задач |
+| `created_at` | DateTime | Когда создана задача |
+| `updated_at` | DateTime | Когда последний раз обновлялась |
+
+**Статусы:**
+- `pending` — ждёт обработки; worker берёт задачи с `next_attempt_at ≤ now()`
+- `processing` — worker взял задачу прямо сейчас
+- `sent` — доставлено успешно
+- `failed` — постоянная ошибка (напр. истёк file cache) — повтора не будет
+- `dead` — 6 временных ошибок подряд — повтора не будет
+
+**Уникальный индекс:** `(channel_id, max_message_id) WHERE direction='incoming'` — защита от дубликатов при параллельных вебхуках.
+
+---
+
 ## Связи между таблицами
 
 ```
 Portal  ──(один-ко-многим)──  Channel  ──(один-ко-многим)──  Message
+                                                 │
+                                                 └──(один-ко-многим)──  MessageDeliveryTask
 
 SeenEvent — независимая таблица, не связана с Portal/Channel
 ```

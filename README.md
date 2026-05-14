@@ -41,25 +41,30 @@ edna (сервер MAX Bot API)
      ├── GET  /settings                   ← UI настроек (Jinja2 HTML)
      └── /api/*                           ← REST API для UI настроек
      │
-     └── База данных (PostgreSQL)
-              Portal → Channel → Message / SeenEvent
+     ├── База данных (PostgreSQL)
+     │        Portal → Channel → Message / SeenEvent
+     │        MessageDeliveryTask (очередь доставки)
+     └── Delivery Worker (asyncio, фоновый)
+              читает MessageDeliveryTask → доставляет → retry при ошибках
 ```
 
 ### Поток входящего сообщения (клиент → оператор)
-1. edna присылает `POST /incoming` с вебхуком MAX Bot
-2. Приложение находит канал по `subject` (sender), получает `subscriber.identifier` (MAX ID)
-3. В зависимости от типа сообщения:
-   - **TEXT** — текст передаётся в Bitrix24 как есть
-   - **IMAGE, DOCUMENT, AUDIO, VIDEO, VOICE** — URL файла из edna передаётся напрямую в `imconnector.send.messages` через параметр `files`; файл скачивать не нужно, S3-ссылка живёт ~1 год
-   - **LOCATION** — координаты конвертируются в текст со ссылкой на Яндекс.Карты (Bitrix24 не поддерживает геолокацию как отдельный тип)
-4. Вызывает `imconnector.send.messages` в Bitrix24 — сообщение появляется в Открытых линиях
+1. edna присылает `POST /incoming/{webhook_token}` с вебхуком MAX Bot
+2. Приложение находит канал по `webhook_token` из URL, проверяет дедупликацию по `max_message_id`
+3. Создаёт задачу в `message_delivery_tasks` (status=pending), сразу возвращает `200 OK`
+4. Delivery Worker подхватывает задачу и вызывает `imconnector.send.messages` в Bitrix24:
+   - **TEXT** — текст передаётся как есть
+   - **IMAGE, DOCUMENT, AUDIO, VIDEO, VOICE** — URL файла из edna передаётся напрямую; S3-ссылка живёт ~1 год
+   - **LOCATION** — координаты конвертируются в текст со ссылкой на Яндекс.Карты
+5. При ошибке — автоматический retry (до 6 раз, расписание 1с → 30м)
 
 ### Поток исходящего сообщения (оператор → клиент)
 1. Bitrix24 присылает `POST /handler` с событием `OnImConnectorMessageAdd`
 2. Тело — **PHP-style URL-encoded форма** (`data[MESSAGES][0][chat][id]=...`), парсится в `_parse_php_form()`
-3. Если есть файл — приложение **немедленно скачивает его с Bitrix24** и кладёт в память
-4. Отправляет запрос в edna API (`POST /api/v1/out-messages/max-bot`)
-5. edna забирает файл с `/file/{key}` — он уже в памяти, без зависимости от Bitrix
+3. Если есть файл — приложение **немедленно скачивает его с Bitrix24** пока SIGN-подпись ещё действительна, кладёт в `file_cache` под UUID-ключом
+4. Создаёт задачу в `message_delivery_tasks` (status=pending), сразу возвращает `200 OK` (Bitrix24 повторяет при не-200)
+5. Delivery Worker подхватывает задачу, вызывает edna API; edna забирает файл с `/file/{uuid}.ext` — стабильный URL, без зависимости от Bitrix
+6. При ошибке — автоматический retry (до 6 раз)
 
 ---
 
@@ -99,10 +104,11 @@ app/
     install.py       # установка приложения в Bitrix24
     settings_page.py # страница настроек (HTML через Jinja2)
   services/
-    bitrix.py        # вызовы Bitrix24 REST API
-    maxbot.py        # вызовы edna MAX Bot API
-    file_cache.py    # кеш файлов в памяти (UUID → bytes, TTL 10 мин)
-  models.py          # SQLAlchemy модели: Portal, Channel, Message
+    bitrix.py          # вызовы Bitrix24 REST API
+    maxbot.py          # вызовы edna MAX Bot API
+    file_cache.py      # кеш файлов в памяти (UUID → bytes, TTL 10 мин)
+    delivery_worker.py # фоновый worker: читает очередь, доставляет с retry
+  models.py          # SQLAlchemy модели: Portal, Channel, Message, MessageDeliveryTask, SeenEvent
   schemas.py         # Pydantic схемы (валидация запросов и ответов)
   config.py          # настройки из переменных окружения
   database.py        # подключение к БД
@@ -191,5 +197,5 @@ web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 Подробнее — в [review.md](review.md).
 
-- **Кеш файлов в памяти**: при рестарте сервера файлы теряются. Если edna попытается забрать файл после рестарта — получит 404. На практике edna скачивает быстро, проблем не возникает.
+- **Кеш файлов в памяти**: при рестарте сервера файлы теряются. Если в очереди остались незавершённые задачи с `file_key` — worker получит `file_cache_expired` и пометит их как `failed` (не будет бесконечно ретраить). На практике edna скачивает быстро и это не проблема.
 - **Нет редактирования API-ключа канала**: только отключить и создать новый.
