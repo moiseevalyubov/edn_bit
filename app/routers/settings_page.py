@@ -34,6 +34,10 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="main" style="display:none">
+    <div id="paymentNotice" class="d-none mb-4" style="background:#fffbf0; border-left:3px solid #e0c060; border-radius:4px; padding:10px 16px; font-size:13px; color:#666;">
+      Подписка Bitrix истекла. Канал может не работать в Открытых линиях.
+    </div>
+
     <h5 class="mb-4">MAX Bot — настройки</h5>
 
     <!-- Open Line section -->
@@ -132,8 +136,20 @@ BX24.init(function() {
     }
     loadChannels();
     loadOpenLines();
+    loadPortalStatus();
   });
 });
+
+function loadPortalStatus() {
+  fetch('/api/portal/status?member_id=' + encodeURIComponent(memberId))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.payment_required) {
+        document.getElementById('paymentNotice').classList.remove('d-none');
+      }
+    })
+    .catch(function() {});
+}
 
 function loadChannels() {
   fetch('/api/channels?member_id=' + encodeURIComponent(memberId))

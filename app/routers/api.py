@@ -35,6 +35,12 @@ def get_channel_for_portal(channel_id: int, portal: Portal, db: Session) -> Chan
     return channel
 
 
+@router.get("/portal/status")
+def portal_status(member_id: str, db: Session = Depends(get_db)):
+    portal = get_portal_or_404(member_id, db)
+    return {"payment_required": portal.payment_required_at is not None}
+
+
 @router.get("/channels", response_model=List[ChannelResponse])
 def list_channels(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
