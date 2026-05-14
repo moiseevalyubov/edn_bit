@@ -50,6 +50,9 @@ async def refresh_token(portal: Portal, db: Session) -> Portal:
     portal.token_expires_at = datetime.utcnow() + timedelta(
         seconds=int(data.get("expires_in", 3600))
     )
+    if portal.payment_required_at is not None:
+        portal.payment_required_at = None
+        logger.info("Portal %s subscription restored", portal.member_id)
     db.commit()
     db.refresh(portal)
     return portal
@@ -58,8 +61,6 @@ async def refresh_token(portal: Portal, db: Session) -> Portal:
 async def get_valid_token(portal: Portal, db: Session) -> str:
     if portal.uninstalled_at is not None:
         raise RuntimeError(f"Portal {portal.member_id} has been uninstalled — refusing token refresh")
-    if portal.payment_required_at is not None:
-        raise PaymentRequiredError(f"Portal {portal.member_id} subscription expired")
     if is_token_expired(portal):
         portal = await refresh_token(portal, db)
     return portal.access_token
