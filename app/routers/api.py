@@ -26,6 +26,15 @@ def get_portal_or_404(member_id: str, db: Session) -> Portal:
     return portal
 
 
+def get_channel_for_portal(channel_id: int, portal: Portal, db: Session) -> Channel:
+    channel = db.query(Channel).filter_by(id=channel_id).first()
+    if not channel:
+        raise HTTPException(status_code=404, detail="Канал не найден")
+    if channel.portal_id != portal.id:
+        raise HTTPException(status_code=403, detail="Канал не принадлежит этому порталу")
+    return channel
+
+
 @router.get("/channels", response_model=List[ChannelResponse])
 def list_channels(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
@@ -135,10 +144,7 @@ async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
 @router.post("/channels/{channel_id}/disconnect")
 def disconnect_channel(channel_id: int, member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
-    channel = db.query(Channel).filter_by(id=channel_id, portal_id=portal.id).first()
-    if not channel:
-        raise HTTPException(status_code=404, detail="Канал не найден")
-
+    channel = get_channel_for_portal(channel_id, portal, db)
     channel.is_active = False
     channel.disconnected_at = datetime.utcnow()
     db.commit()
