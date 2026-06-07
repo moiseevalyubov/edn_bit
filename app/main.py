@@ -118,6 +118,16 @@ with engine.connect() as _conn:
         _conn.rollback()
         logger.warning("Migration REL-4 dedup index skipped: %s", _e)
 
+# UX: store edna subjectId/type captured during automatic webhook setup
+with engine.connect() as _conn:
+    for _col, _coltype in (("subject_id", "INTEGER"), ("channel_type", "TEXT")):
+        try:
+            _conn.execute(text(f"ALTER TABLE channels ADD COLUMN {_col} {_coltype}"))
+            _conn.commit()
+            logger.info("Migration: added channels.%s column", _col)
+        except Exception:
+            _conn.rollback()
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:

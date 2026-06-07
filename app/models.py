@@ -51,6 +51,8 @@ class Channel(Base):
     api_key = Column(EncryptedString, nullable=False)
     sender = Column(String, nullable=False)
     webhook_token = Column(String, nullable=True, unique=True, index=True)
+    subject_id = Column(Integer, nullable=True)      # edna subjectId, captured on auto webhook setup
+    channel_type = Column(String, nullable=True)     # edna channel type (e.g. WHATSAPP, MAX_BOT)
     connected_at = Column(DateTime, default=datetime.utcnow)
     disconnected_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)

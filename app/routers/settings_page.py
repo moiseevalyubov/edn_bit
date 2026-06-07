@@ -63,13 +63,14 @@ SETTINGS_HTML = """<!DOCTYPE html>
             <tr>
               <th>Название</th>
               <th>Sender ID</th>
+              <th>Тип канала</th>
               <th>Подключён</th>
               <th>Статус</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="channelsList">
-            <tr id="emptyRow"><td colspan="5" class="text-center text-muted py-3">Каналов нет</td></tr>
+            <tr id="emptyRow"><td colspan="6" class="text-center text-muted py-3">Каналов нет</td></tr>
           </tbody>
         </table>
       </div>
@@ -92,23 +93,36 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <div class="mb-3">
           <label class="form-label">Sender ID</label>
           <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала MAX Bot">
+          <div class="form-text">Должен совпадать с названием подписки (subject) канала в личном кабинете edna.</div>
           <div id="senderError" class="text-danger small mt-1 d-none"></div>
         </div>
         <button class="btn btn-primary" id="saveBtn" onclick="saveChannel()">
           <span id="saveBtnText">Подключить</span>
           <span id="saveBtnSpinner" class="spinner-border spinner-border-sm d-none ms-1"></span>
         </button>
+        <div id="connectingNotice" class="text-muted small mt-2 d-none">
+          Выполняется подключение канала и настройка webhook в edna — это может занять несколько секунд…
+        </div>
       </div>
     </div>
 
-    <!-- Webhook URL (shown after save) -->
+    <!-- Result (shown after save) -->
     <div id="webhookBlock" class="card mt-4 d-none">
       <div class="card-body">
-        <h6 class="mb-2">✓ Канал подключён</h6>
-        <p class="text-muted small mb-2">Скопируйте этот URL и укажите его как webhook на сервере MAX Bot:</p>
-        <div class="webhook-box" id="webhookUrl"></div>
-        <button class="btn btn-outline-secondary btn-sm mt-2" onclick="copyWebhook()">Скопировать</button>
-        <span id="copyConfirm" class="text-success ms-2 small" style="display:none">Ссылка скопирована</span>
+        <!-- Success: webhook auto-registered in edna -->
+        <div id="webhookAuto" class="d-none">
+          <h6 class="mb-1 text-success">✓ Канал подключён и настроен</h6>
+          <p class="text-muted small mb-0">Webhook автоматически прописан в edna — больше ничего делать не нужно.</p>
+        </div>
+        <!-- Fallback: ask the user to set the URL manually -->
+        <div id="webhookManual" class="d-none">
+          <h6 class="mb-2">✓ Канал подключён</h6>
+          <div id="webhookManualReason" class="alert alert-warning small d-none mb-2"></div>
+          <p class="text-muted small mb-2">Скопируйте этот URL и укажите его как webhook для входящих сообщений в личном кабинете edna:</p>
+          <div class="webhook-box" id="webhookUrl"></div>
+          <button class="btn btn-outline-secondary btn-sm mt-2" onclick="copyWebhook()">Скопировать</button>
+          <span id="copyConfirm" class="text-success ms-2 small" style="display:none">Ссылка скопирована</span>
+        </div>
       </div>
     </div>
   </div>
@@ -287,6 +301,7 @@ function renderChannels(channels) {
     rows.push('<tr' + hiddenAttr + '>' +
       '<td>' + esc(ch.name) + '</td>' +
       '<td class="font-monospace">' + esc(ch.sender) + '</td>' +
+      '<td>' + (ch.channel_type ? esc(ch.channel_type) : '<span class="text-muted">—</span>') + '</td>' +
       '<td>' + date + '</td>' +
       '<td>' + badge + '</td>' +
       '<td>' + btn + '</td>' +
@@ -297,7 +312,7 @@ function renderChannels(channels) {
     emptyRow.style.display = 'none';
     var html = rows.join('');
     if (channels.length > 3) {
-      html += '<tr id="showAllRow"><td colspan="5" class="text-center py-2">' +
+      html += '<tr id="showAllRow"><td colspan="6" class="text-center py-2">' +
         '<button class="btn btn-link btn-sm p-0" onclick="showAllChannels()">' +
         'Все каналы (' + channels.length + ')' +
         '</button></td></tr>';
@@ -350,8 +365,7 @@ function saveChannel() {
       document.getElementById('channelName').value = '';
       document.getElementById('apiKey').value = '';
       document.getElementById('sender').value = '';
-      document.getElementById('webhookUrl').textContent = data.webhook_url;
-      document.getElementById('webhookBlock').classList.remove('d-none');
+      showWebhookResult(data);
       loadChannels();
     });
   })
@@ -374,6 +388,27 @@ function disconnect(channelId) {
   .catch(function(e) { alert('Ошибка: ' + e.message); });
 }
 
+function showWebhookResult(data) {
+  document.getElementById('webhookUrl').textContent = data.webhook_url;
+  var auto = document.getElementById('webhookAuto');
+  var manual = document.getElementById('webhookManual');
+  if (data.auto_configured) {
+    auto.classList.remove('d-none');
+    manual.classList.add('d-none');
+  } else {
+    auto.classList.add('d-none');
+    manual.classList.remove('d-none');
+    var reason = document.getElementById('webhookManualReason');
+    if (data.auto_error) {
+      reason.textContent = 'Автоматическая настройка не удалась: ' + data.auto_error;
+      reason.classList.remove('d-none');
+    } else {
+      reason.classList.add('d-none');
+    }
+  }
+  document.getElementById('webhookBlock').classList.remove('d-none');
+}
+
 function copyWebhook() {
   var url = document.getElementById('webhookUrl').textContent;
   var ta = document.createElement('textarea');
@@ -393,6 +428,8 @@ function copyWebhook() {
 function setLoading(on) {
   document.getElementById('saveBtn').disabled = on;
   document.getElementById('saveBtnSpinner').classList.toggle('d-none', !on);
+  document.getElementById('saveBtnText').textContent = on ? 'Подключение…' : 'Подключить';
+  document.getElementById('connectingNotice').classList.toggle('d-none', !on);
 }
 
 function showFormError(msg) {

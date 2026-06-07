@@ -15,6 +15,7 @@ class ChannelResponse(BaseModel):
     id: int
     name: str
     sender: str
+    channel_type: Optional[str] = None
     is_active: bool
     connected_at: datetime
     disconnected_at: Optional[datetime] = None
@@ -25,6 +26,8 @@ class ChannelResponse(BaseModel):
 class ChannelSaveResponse(BaseModel):
     channel: ChannelResponse
     webhook_url: str
+    auto_configured: bool = False
+    auto_error: Optional[str] = None
 
 
 class OpenLineSet(BaseModel):

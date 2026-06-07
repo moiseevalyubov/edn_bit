@@ -14,6 +14,7 @@ from app.database import get_db
 from app.models import Channel, Portal
 from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse, OpenLineSet
 from app.services.bitrix import activate_connector, bind_events, create_open_line, get_open_lines, register_connector
+from app.services.maxbot import WebhookSetupError, configure_incoming_webhook
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -48,7 +49,7 @@ def list_channels(member_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/channels", response_model=ChannelSaveResponse)
-def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
+async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     portal = get_portal_or_404(body.member_id, db)
 
     duplicate_sender = db.query(Channel).filter_by(
@@ -77,7 +78,34 @@ def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     db.refresh(channel)
 
     webhook_url = f"{settings.app_base_url}/incoming/{channel.webhook_token}"
-    return ChannelSaveResponse(channel=ChannelResponse.model_validate(channel), webhook_url=webhook_url)
+
+    # UX: automatically register the webhook URL in edna so the user no longer
+    # has to copy-paste it into their edna account. If this fails, the channel is
+    # still saved and we fall back to showing the URL + manual instructions.
+    auto_configured = False
+    auto_error = None
+    try:
+        info = await configure_incoming_webhook(channel.api_key, channel.sender, webhook_url)
+        channel.subject_id = info["subject_id"]
+        channel.channel_type = info.get("type")
+        db.commit()
+        auto_configured = True
+        logger.info(
+            "Channel %s: webhook auto-registered in edna (subjectId=%s)", channel.id, info["subject_id"]
+        )
+    except WebhookSetupError as e:
+        auto_error = str(e)
+        logger.warning("Channel %s: auto webhook setup failed: %s", channel.id, e)
+    except Exception as e:
+        auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
+        logger.warning("Channel %s: auto webhook setup error: %s", channel.id, e)
+
+    return ChannelSaveResponse(
+        channel=ChannelResponse.model_validate(channel),
+        webhook_url=webhook_url,
+        auto_configured=auto_configured,
+        auto_error=auto_error,
+    )
 
 
 @router.get("/open-lines")
