@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models import Channel, Message, MessageDeliveryTask, Portal
 from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
+from app.services.sanitize import sanitize_name, sanitize_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,12 +42,19 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         logger.error("Incoming: failed to parse JSON body")
         return JSONResponse({"error": "bad_request"}, status_code=400)
 
+    # SEC-7: reject payloads that aren't a JSON object (would crash .get() below)
+    if not isinstance(data, dict):
+        logger.error("Incoming: payload is not a JSON object")
+        return JSONResponse({"error": "bad_request"}, status_code=400)
+
     portal: Portal = channel.portal
     if not portal:
         logger.warning("Incoming: channel %s has no portal", channel.id)
         return JSONResponse({"status": "ok"})
 
-    msg_content = data.get("messageContent", {})
+    msg_content = data.get("messageContent")
+    if not isinstance(msg_content, dict):
+        msg_content = {}
     msg_type = msg_content.get("type")
 
     _ATTACHMENT_TYPES = {"IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "VOICE"}
@@ -55,12 +63,19 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
         return JSONResponse({"status": "ok"})
 
-    subscriber = data.get("subscriber", {})
+    subscriber = data.get("subscriber")
+    if not isinstance(subscriber, dict):
+        subscriber = {}
     subscriber_id = str(subscriber.get("id", ""))
     subscriber_identifier = str(subscriber.get("identifier", ""))
 
-    user_info = data.get("userInfo", {})
-    user_name = user_info.get("userName") or user_info.get("firstName") or subscriber_identifier
+    user_info = data.get("userInfo")
+    if not isinstance(user_info, dict):
+        user_info = {}
+    # SEC-10: strip HTML/JS, SEC-7: cap to 255 chars
+    user_name = sanitize_name(
+        user_info.get("userName") or user_info.get("firstName") or subscriber_identifier
+    )
 
     msg_id = str(data.get("id", ""))
     chat_id = subscriber_identifier
@@ -79,7 +94,9 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             return JSONResponse({"status": "ok"})
 
     if msg_type in _ATTACHMENT_TYPES:
-        attachment = msg_content.get("attachment") or {}
+        attachment = msg_content.get("attachment")
+        if not isinstance(attachment, dict):
+            attachment = {}
         file_url = attachment.get("url")
         if not file_url:
             logger.warning("Incoming %s: missing attachment.url", msg_type)
@@ -87,7 +104,8 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
 
         # name is null in edna payload — extract from URL path
         file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
-        caption = msg_content.get("caption") or msg_content.get("text") or None
+        # SEC-10/SEC-7: strip HTML/JS and cap caption length
+        caption = sanitize_text(msg_content.get("caption") or msg_content.get("text") or "") or None
 
         try:
             enqueue_incoming(
@@ -114,7 +132,9 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             return JSONResponse({"error": "service_unavailable"}, status_code=503)
 
     elif msg_type == "LOCATION":
-        loc = msg_content.get("location") or {}
+        loc = msg_content.get("location")
+        if not isinstance(loc, dict):
+            loc = {}
         lat = loc.get("latitude")
         lon = loc.get("longitude")
         if not lat or not lon:
@@ -122,7 +142,8 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             return JSONResponse({"status": "ok"})
 
         maps_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
-        address = loc.get("address")
+        # SEC-10: address comes from the client — strip HTML/JS before embedding
+        address = sanitize_text(loc.get("address") or "") or None
         text = f"📍 {address}\n{maps_url}" if address else f"📍 Местоположение: {maps_url}"
 
         try:
@@ -148,7 +169,8 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             return JSONResponse({"error": "service_unavailable"}, status_code=503)
 
     else:  # TEXT
-        text = msg_content.get("text") or ""
+        # SEC-10: strip HTML/JS, SEC-7: cap to 4096 chars
+        text = sanitize_text(msg_content.get("text") or "")
         if not text:
             return JSONResponse({"status": "ok"})
 

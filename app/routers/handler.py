@@ -124,8 +124,15 @@ async def handler(request: Request, db: Session = Depends(get_db)):
             logger.error("Handler: failed to parse body (content-type=%s): %s", content_type, body[:200])
             return JSONResponse({"status": "ok"})
 
+    # SEC-7: tolerate non-object payloads without crashing on .get() below
+    if not isinstance(data, dict):
+        logger.error("Handler: payload is not a JSON object")
+        return JSONResponse({"status": "ok"})
+
     event = data.get("event", "").upper()
-    auth = data.get("auth", {})
+    auth = data.get("auth")
+    if not isinstance(auth, dict):
+        auth = {}
     member_id = auth.get("member_id")
     app_token = auth.get("application_token")
 
