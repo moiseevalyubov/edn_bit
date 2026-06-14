@@ -33,8 +33,8 @@ SETTINGS_HTML = """<!DOCTYPE html>
       --edna-primary: #121212;        /* Grey900 — заливка главной кнопки (подтверждено по Figma) */
     }
 
-    body { background: #f8f9fa; padding: 24px; font-size: 14px; color: var(--edna-text); font-family: var(--edna-font); }
-    .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
+    body { background: #fff; padding: 24px; font-size: 14px; color: var(--edna-text); font-family: var(--edna-font); }
+    .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.1); border-radius: 8px; overflow: hidden; }
     .webhook-box { background: #e8f0fe; border-radius: 6px; padding: 10px 14px; word-break: break-all; font-family: monospace; font-size: 13px; }
 
     /* ---- Таблица в стиле edna: серые мелкие заголовки, тонкие светлые разделители ---- */
@@ -288,7 +288,7 @@ function renderOpenLine(data) {
   if (name) {
     status.innerHTML =
       '<span class="badge badge-active rounded-pill me-2">Подключена</span>' + esc(name) +
-      ' <button class="btn btn-outline-secondary btn-sm ms-2" onclick="editOpenLine()">Изменить</button>';
+      ' <button class="btn btn-primary btn-sm ms-2" onclick="editOpenLine()">Изменить</button>';
   } else if (lines.length) {
     status.innerHTML =
       '<span class="badge badge-warning rounded-pill me-2">Не выбрана</span>' +
