@@ -72,10 +72,11 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     webhook_url = f"{settings.app_base_url}/incoming/{webhook_token}"
 
     # UX: auto-register the webhook in edna so the user doesn't copy-paste the URL.
-    # - fatal failure (wrong Sender ID, invalid key, channel not active) → the
-    #   channel can never work, so we abort WITHOUT creating it (422).
-    # - transient failure (edna/network/proxy/403 без прав/cold start) → still
-    #   create the channel and fall back to manual URL setup.
+    # - fatal failure (wrong Sender ID, invalid key 401, no access to subject 403,
+    #   channel not active) → the channel can never work / can't be verified, so we
+    #   abort WITHOUT creating it (422).
+    # - transient failure (edna/network/proxy/5xx/cold start) → still create the
+    #   channel and fall back to manual URL setup.
     auto_configured = False
     auto_error = None
     subject_id = None

@@ -110,10 +110,11 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
 
     Возвращает {"subject_id": int, "type": str|None} при успехе.
     Бросает WebhookSetupError при ошибке (см. флаг fatal в самом исключении):
-    - fatal=True  — канал заведомо нерабочий (неверный Sender ID, ключ невалиден
-      401, канал не активирован, edna не знает subjectId) → канал создавать нельзя;
-    - fatal=False — временная проблема (сеть/прокси/5xx/403 без прав/cold start) →
-      канал создаётся, пользователю предлагается ручная настройка URL."""
+    - fatal=True  — канал заведомо нерабочий или непроверяемый (неверный Sender ID,
+      ключ невалиден 401, нет доступа к подписи 403, канал не активирован, edna не
+      знает subjectId) → канал создавать нельзя;
+    - fatal=False — временная проблема (сеть/прокси/edna 5xx/cold start) → канал
+      создаётся, пользователю предлагается ручная настройка URL."""
     # --- 1) Список каналов (валидирует ключ + ищем канал по subject) ---
     try:
         channels = await get_channel_profiles(api_key)
@@ -125,10 +126,12 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
                 fatal=True,
             )
         if status == 403:
+            # 403 = ключ не может прочитать список каналов, значит мы НЕ можем
+            # проверить, что подпись существует. Канал создавать нельзя.
             raise WebhookSetupError(
-                "у API-ключа нет прав на управление каналами в edna (403). "
-                "Укажите URL webhook вручную в личном кабинете edna.",
-                fatal=False,
+                "у API-ключа нет доступа к этой подписи (403). Проверьте разрешения этого "
+                "ключа в edna или правильность названия подписи (Sender ID).",
+                fatal=True,
             )
         raise WebhookSetupError(
             f"edna вернула ошибку {status} при получении списка каналов. Попробуйте ещё раз позже.",
