@@ -61,6 +61,12 @@ def _callback_error_message(code) -> str:
     return _CALLBACK_ERROR_MESSAGES.get(code, f"edna отклонила настройку webhook (код: {code}).")
 
 
+def _http_status_message(status: int, action: str) -> str:
+    if status in (401, 403):
+        return "edna отклонила запрос: неверный или недействительный API-ключ канала."
+    return f"edna вернула ошибку {status} при {action}."
+
+
 async def get_channel_profiles(api_key: str) -> list:
     """GET /api/channel-profile — список всех каналов для этого API-ключа.
 
@@ -103,7 +109,15 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
     Бросает WebhookSetupError с готовым для пользователя текстом при логической
     ошибке (канал не найден, не активирован, edna отклонила URL). Сетевые ошибки
     httpx пробрасываются наверх — их обрабатывает вызывающий код."""
-    channels = await get_channel_profiles(api_key)
+    try:
+        channels = await get_channel_profiles(api_key)
+    except httpx.HTTPStatusError as e:
+        raise WebhookSetupError(_http_status_message(e.response.status_code, "получении списка каналов"))
+    except httpx.HTTPError as e:
+        raise WebhookSetupError(
+            f"Не удалось связаться с edna при получении списка каналов ({type(e).__name__}). "
+            "Попробуйте ещё раз чуть позже."
+        )
     if not isinstance(channels, list):
         raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.")
 
@@ -124,7 +138,15 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
             "Дождитесь активации канала и подключите его снова."
         )
 
-    result = await set_in_message_callback(api_key, subject_id, callback_url)
+    try:
+        result = await set_in_message_callback(api_key, subject_id, callback_url)
+    except httpx.HTTPStatusError as e:
+        raise WebhookSetupError(_http_status_message(e.response.status_code, "установке webhook"))
+    except httpx.HTTPError as e:
+        raise WebhookSetupError(
+            f"Не удалось связаться с edna при установке webhook ({type(e).__name__}). "
+            "Попробуйте ещё раз чуть позже."
+        )
     code = result.get("code") if isinstance(result, dict) else None
     if code != "ok":
         raise WebhookSetupError(_callback_error_message(code))

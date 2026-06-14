@@ -98,7 +98,9 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
         logger.warning("Channel %s: auto webhook setup failed: %s", channel.id, e)
     except Exception as e:
         auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
-        logger.warning("Channel %s: auto webhook setup error: %s", channel.id, e)
+        logger.warning(
+            "Channel %s: unexpected auto webhook setup error: %s: %s", channel.id, type(e).__name__, e
+        )
 
     return ChannelSaveResponse(
         channel=ChannelResponse.model_validate(channel),
