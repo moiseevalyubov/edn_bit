@@ -16,13 +16,101 @@ SETTINGS_HTML = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MAX Bot — настройки</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { background: #f8f9fa; padding: 24px; font-size: 14px; }
+    /* ---- Дизайн-токены edna (из дизайн-системы) ---- */
+    :root {
+      --edna-font: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      --edna-text: #121212;           /* основной текст (Grey900) */
+      --edna-text-secondary: #5B5B5B; /* вторичный текст, заголовки таблиц (Grey600) */
+      --edna-text-tertiary: #B7B7B7;  /* приглушённый */
+      --edna-divider: #ECECEC;        /* линии-разделители (Grey100) */
+      --edna-green: #09A460;          /* Positive500 — «активно» */
+      --edna-red: #E11900;            /* Red500 — ошибка/негатив */
+      --edna-blue: #276EF1;           /* Blue500 — нейтральный статус */
+      --edna-primary: #121212;        /* Grey900 — заливка главной кнопки (подтверждено по Figma) */
+    }
+
+    body { background: #f8f9fa; padding: 24px; font-size: 14px; color: var(--edna-text); font-family: var(--edna-font); }
     .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.1); }
     .webhook-box { background: #e8f0fe; border-radius: 6px; padding: 10px 14px; word-break: break-all; font-family: monospace; font-size: 13px; }
-    .badge-active { background: #d4edda; color: #155724; }
-    .badge-inactive { background: #f8d7da; color: #721c24; }
-    .badge-warning { background: #fff3cd; color: #856404; }
+
+    /* ---- Таблица в стиле edna: серые мелкие заголовки, тонкие светлые разделители ---- */
+    #channelsTable { font-family: var(--edna-font); }
+    #channelsTable thead th {
+      background: #fff;
+      color: var(--edna-text-secondary);
+      font-size: 12px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--edna-divider);
+      padding: 12px 8px;
+    }
+    #channelsTable tbody td {
+      color: var(--edna-text);
+      font-size: 13px;
+      border-bottom: 1px solid var(--edna-divider);
+      padding: 12px 8px;
+      vertical-align: middle;
+    }
+
+    /* ---- Статусы edna: контурные «таблетки», прозрачный фон, цветной текст + рамка ---- */
+    .badge-active, .badge-inactive, .badge-warning {
+      background: transparent;
+      border: 1px solid;
+      border-radius: 24px;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: var(--edna-font);
+    }
+    .badge-active { color: var(--edna-green); border-color: var(--edna-green); }
+    .badge-inactive { color: var(--edna-text-tertiary); border-color: var(--edna-text-tertiary); }
+    .badge-warning { color: var(--edna-blue); border-color: var(--edna-blue); } /* edna для нейтральных статусов использует синий */
+
+    /* ---- Кнопки edna ---- */
+    .btn { border-radius: 8px; font-size: 14px; font-weight: 600; padding: 8px 20px; font-family: var(--edna-font); }
+    .btn-sm { border-radius: 8px; padding: 6px 14px; font-size: 13px; }
+
+    /* Главная кнопка: сплошная заливка, белый текст; при наведении текст светлеет (как у edna) */
+    .btn-primary { background: var(--edna-primary); border-color: var(--edna-primary); color: #fff; }
+    .btn-primary:hover, .btn-primary:focus, .btn-primary:active {
+      background: var(--edna-primary); border-color: var(--edna-primary); color: #d9d9d9;
+    }
+    .btn-primary:disabled { background: var(--edna-primary); border-color: var(--edna-primary); opacity: .55; }
+
+    /* Вторичная кнопка: белый фон, тёмный текст, мягкая тень (точно по edna) */
+    .btn-outline-secondary {
+      background: #fff; color: var(--edna-text); border: 1px solid #fff;
+      box-shadow: 0 1px 4px -1px rgba(18,18,18,.2);
+    }
+    .btn-outline-secondary:hover, .btn-outline-secondary:focus {
+      background: #fff; color: var(--edna-text); border-color: #fff;
+      box-shadow: 0 2px 6px -1px rgba(18,18,18,.28);
+    }
+
+    /* Кнопка «Отключить»: контурная красная (Red500), заливается при наведении */
+    .btn-outline-danger { background: #fff; color: var(--edna-red); border: 1px solid var(--edna-red); }
+    .btn-outline-danger:hover, .btn-outline-danger:focus { background: var(--edna-red); color: #fff; border-color: var(--edna-red); }
+
+    .btn-link { color: var(--edna-blue); font-weight: 600; text-decoration: none; }
+    .btn-link:hover { color: var(--edna-blue); text-decoration: underline; }
+
+    /* ---- Поля ввода edna: тёмная рамка, скругление 8px ---- */
+    .form-control, .form-select {
+      border: 1px solid var(--edna-text);
+      border-radius: 8px;
+      font-size: 14px;
+      color: var(--edna-text);
+      padding: 8px 12px;
+    }
+    .form-control::placeholder { color: var(--edna-text-tertiary); }
+    .form-control:focus, .form-select:focus {
+      border-color: var(--edna-text);
+      box-shadow: 0 0 0 2px rgba(18,18,18,.12);  /* нейтральная подсветка вместо синей Bootstrap */
+    }
+    .form-label { font-weight: 600; font-size: 13px; color: var(--edna-text); }
   </style>
 </head>
 <body>
