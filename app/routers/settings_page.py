@@ -336,6 +336,7 @@ function saveChannel() {
 
   clearFieldErrors();
   document.getElementById('formError').classList.add('d-none');
+  document.getElementById('webhookBlock').classList.add('d-none');
 
   if (!name || !apiKey || !sender) {
     showFormError('Заполните все поля');

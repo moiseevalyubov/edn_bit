@@ -12,7 +12,16 @@ class WebhookSetupError(Exception):
     """Raised when automatic webhook registration in edna fails for a reason
     we can explain to the user (wrong Sender ID, channel not active, etc.).
 
-    The message is a ready-to-show Russian string for the settings UI."""
+    The message is a ready-to-show Russian string for the settings UI.
+
+    `fatal=True` means the channel can never work as configured (wrong Sender ID,
+    invalid key, channel not active) — the caller must NOT create the channel.
+    `fatal=False` means a transient problem (edna/network/proxy/cold start) — the
+    caller still creates the channel and falls back to manual URL setup."""
+
+    def __init__(self, message: str, fatal: bool = True):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
@@ -61,12 +70,6 @@ def _callback_error_message(code) -> str:
     return _CALLBACK_ERROR_MESSAGES.get(code, f"edna отклонила настройку webhook (код: {code}).")
 
 
-def _http_status_message(status: int, action: str) -> str:
-    if status in (401, 403):
-        return "edna отклонила запрос: неверный или недействительный API-ключ канала."
-    return f"edna вернула ошибку {status} при {action}."
-
-
 async def get_channel_profiles(api_key: str) -> list:
     """GET /api/channel-profile — список всех каналов для этого API-ключа.
 
@@ -106,20 +109,39 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
     callback_url как webhook для входящих сообщений.
 
     Возвращает {"subject_id": int, "type": str|None} при успехе.
-    Бросает WebhookSetupError с готовым для пользователя текстом при логической
-    ошибке (канал не найден, не активирован, edna отклонила URL). Сетевые ошибки
-    httpx пробрасываются наверх — их обрабатывает вызывающий код."""
+    Бросает WebhookSetupError при ошибке (см. флаг fatal в самом исключении):
+    - fatal=True  — канал заведомо нерабочий (неверный Sender ID, ключ невалиден
+      401, канал не активирован, edna не знает subjectId) → канал создавать нельзя;
+    - fatal=False — временная проблема (сеть/прокси/5xx/403 без прав/cold start) →
+      канал создаётся, пользователю предлагается ручная настройка URL."""
+    # --- 1) Список каналов (валидирует ключ + ищем канал по subject) ---
     try:
         channels = await get_channel_profiles(api_key)
     except httpx.HTTPStatusError as e:
-        raise WebhookSetupError(_http_status_message(e.response.status_code, "получении списка каналов"))
+        status = e.response.status_code
+        if status == 401:
+            raise WebhookSetupError(
+                "edna не приняла API-ключ (401). Проверьте, что ключ верный и активен.",
+                fatal=True,
+            )
+        if status == 403:
+            raise WebhookSetupError(
+                "у API-ключа нет прав на управление каналами в edna (403). "
+                "Укажите URL webhook вручную в личном кабинете edna.",
+                fatal=False,
+            )
+        raise WebhookSetupError(
+            f"edna вернула ошибку {status} при получении списка каналов. Попробуйте ещё раз позже.",
+            fatal=False,
+        )
     except httpx.HTTPError as e:
         raise WebhookSetupError(
             f"Не удалось связаться с edna при получении списка каналов ({type(e).__name__}). "
-            "Попробуйте ещё раз чуть позже."
+            "Попробуйте ещё раз чуть позже.",
+            fatal=False,
         )
     if not isinstance(channels, list):
-        raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.")
+        raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
 
     match = next(
         (c for c in channels if isinstance(c, dict) and c.get("subject") == sender),
@@ -128,27 +150,41 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
     if not match:
         raise WebhookSetupError(
             "В edna не найден канал с таким Sender ID. Проверьте, что Sender ID точно "
-            "совпадает с названием подписки (subject) в личном кабинете edna."
+            "совпадает с названием подписи (subject) в личном кабинете edna.",
+            fatal=True,
         )
 
     subject_id = match.get("subjectId")
     if not subject_id:
         raise WebhookSetupError(
             "Канал найден в edna, но ещё не активирован (нет subjectId). "
-            "Дождитесь активации канала и подключите его снова."
+            "Активируйте канал в edna и подключите его снова.",
+            fatal=True,
         )
 
+    # --- 2) Установка callback URL ---
     try:
         result = await set_in_message_callback(api_key, subject_id, callback_url)
     except httpx.HTTPStatusError as e:
-        raise WebhookSetupError(_http_status_message(e.response.status_code, "установке webhook"))
+        status = e.response.status_code
+        if status == 401:
+            raise WebhookSetupError(
+                "edna не приняла API-ключ (401) при установке webhook.", fatal=True
+            )
+        raise WebhookSetupError(
+            f"edna вернула ошибку {status} при установке webhook. Попробуйте ещё раз позже.",
+            fatal=False,
+        )
     except httpx.HTTPError as e:
         raise WebhookSetupError(
             f"Не удалось связаться с edna при установке webhook ({type(e).__name__}). "
-            "Попробуйте ещё раз чуть позже."
+            "Попробуйте ещё раз чуть позже.",
+            fatal=False,
         )
     code = result.get("code") if isinstance(result, dict) else None
     if code != "ok":
-        raise WebhookSetupError(_callback_error_message(code))
+        # error-subject-unknown = битый конфиг канала → блокируем; остальные коды
+        # (наш URL/доступность) — временные, оставляем ручной фолбэк.
+        raise WebhookSetupError(_callback_error_message(code), fatal=(code == "error-subject-unknown"))
 
     return {"subject_id": subject_id, "type": match.get("type")}

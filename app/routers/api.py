@@ -65,42 +65,55 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     if duplicate_name:
         raise HTTPException(status_code=422, detail={"field": "name", "message": "Название должно быть уникальным"})
 
+    # Build the webhook URL up front. The token is just a random id — nothing is
+    # persisted yet, so we can register it in edna BEFORE creating the channel and
+    # abort cleanly if the channel turns out to be unusable.
+    webhook_token = uuid.uuid4().hex
+    webhook_url = f"{settings.app_base_url}/incoming/{webhook_token}"
+
+    # UX: auto-register the webhook in edna so the user doesn't copy-paste the URL.
+    # - fatal failure (wrong Sender ID, invalid key, channel not active) → the
+    #   channel can never work, so we abort WITHOUT creating it (422).
+    # - transient failure (edna/network/proxy/403 без прав/cold start) → still
+    #   create the channel and fall back to manual URL setup.
+    auto_configured = False
+    auto_error = None
+    subject_id = None
+    channel_type = None
+    try:
+        info = await configure_incoming_webhook(body.api_key, body.sender, webhook_url)
+        subject_id = info["subject_id"]
+        channel_type = info.get("type")
+        auto_configured = True
+    except WebhookSetupError as e:
+        if e.fatal:
+            logger.info("Channel (sender=%s): auto webhook setup blocked creation: %s", body.sender, e)
+            raise HTTPException(status_code=422, detail=f"Автоматическая настройка не удалась: {e}")
+        auto_error = str(e)
+        logger.warning("Channel (sender=%s): auto webhook setup failed (transient): %s", body.sender, e)
+    except Exception as e:
+        auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
+        logger.warning(
+            "Channel (sender=%s): unexpected auto webhook setup error: %s: %s",
+            body.sender, type(e).__name__, e,
+        )
+
     channel = Channel(
         portal_id=portal.id,
         name=body.name,
         api_key=body.api_key,
         sender=body.sender,
-        webhook_token=uuid.uuid4().hex,
+        webhook_token=webhook_token,
+        subject_id=subject_id,
+        channel_type=channel_type,
         is_active=True,
     )
     db.add(channel)
     db.commit()
     db.refresh(channel)
 
-    webhook_url = f"{settings.app_base_url}/incoming/{channel.webhook_token}"
-
-    # UX: automatically register the webhook URL in edna so the user no longer
-    # has to copy-paste it into their edna account. If this fails, the channel is
-    # still saved and we fall back to showing the URL + manual instructions.
-    auto_configured = False
-    auto_error = None
-    try:
-        info = await configure_incoming_webhook(channel.api_key, channel.sender, webhook_url)
-        channel.subject_id = info["subject_id"]
-        channel.channel_type = info.get("type")
-        db.commit()
-        auto_configured = True
-        logger.info(
-            "Channel %s: webhook auto-registered in edna (subjectId=%s)", channel.id, info["subject_id"]
-        )
-    except WebhookSetupError as e:
-        auto_error = str(e)
-        logger.warning("Channel %s: auto webhook setup failed: %s", channel.id, e)
-    except Exception as e:
-        auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
-        logger.warning(
-            "Channel %s: unexpected auto webhook setup error: %s: %s", channel.id, type(e).__name__, e
-        )
+    if auto_configured:
+        logger.info("Channel %s: webhook auto-registered in edna (subjectId=%s)", channel.id, subject_id)
 
     return ChannelSaveResponse(
         channel=ChannelResponse.model_validate(channel),
