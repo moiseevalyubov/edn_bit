@@ -20,6 +20,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+    /* Стиль формы — по дизайн-системе edna. Справочник и правила: docs/STYLE_GUIDE.md */
     /* ---- Дизайн-токены edna (из дизайн-системы) ---- */
     :root {
       --edna-font: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
