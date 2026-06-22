@@ -112,6 +112,25 @@ SETTINGS_HTML = """<!DOCTYPE html>
       box-shadow: 0 0 0 2px rgba(18,18,18,.12);  /* нейтральная подсветка вместо синей Bootstrap */
     }
     .form-label { font-weight: 600; font-size: 13px; color: var(--edna-text); }
+
+    /* ---- Внутреннее модальное окно edna (вместо браузерных confirm/alert) ---- */
+    .modal-backdrop-edna {
+      position: fixed; inset: 0; z-index: 1050;
+      background: rgba(18,18,18,.45);
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .modal-box-edna {
+      background: #fff; border-radius: 8px;
+      box-shadow: 0 8px 28px rgba(18,18,18,.25);
+      max-width: 420px; width: 100%;
+      padding: 24px;
+      font-family: var(--edna-font);
+    }
+    .modal-title-edna { font-size: 16px; font-weight: 700; color: var(--edna-text); margin-bottom: 8px; }
+    .modal-title-edna:empty { display: none; }
+    .modal-message-edna { font-size: 14px; color: var(--edna-text); line-height: 1.5; }
+    .modal-actions-edna { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
   </style>
 </head>
 <body>
@@ -218,6 +237,18 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 </div>
 
+<!-- Внутреннее модальное окно (замена браузерных confirm/alert — они блокируются в iframe) -->
+<div id="modalBackdrop" class="modal-backdrop-edna d-none">
+  <div class="modal-box-edna" role="dialog" aria-modal="true">
+    <div id="modalTitle" class="modal-title-edna"></div>
+    <div id="modalMessage" class="modal-message-edna"></div>
+    <div class="modal-actions-edna">
+      <button type="button" id="modalCancelBtn" class="btn btn-outline-secondary btn-sm">Отмена</button>
+      <button type="button" id="modalOkBtn" class="btn btn-primary btn-sm">OK</button>
+    </div>
+  </div>
+</div>
+
 <script src="//api.bitrix24.com/api/v1/"></script>
 <script>
 var memberId = null;
@@ -305,21 +336,22 @@ function renderOpenLine(data) {
 }
 
 function createOpenLine() {
-  if (!confirm('Создать открытую линию «edna MAX» в Битрикс24?')) return;
-  var btn = document.getElementById('createLineBtn');
-  btn.disabled = true;
-  btn.textContent = 'Создаём...';
-  fetch('/api/open-lines/create?member_id=' + encodeURIComponent(memberId), {method: 'POST'})
-    .then(function(r) {
-      if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
-      return r.json();
-    })
-    .then(function() { loadOpenLines(); })
-    .catch(function(e) {
-      btn.disabled = false;
-      btn.textContent = 'Создать линию';
-      alert('Ошибка: ' + e.message);
-    });
+  showConfirm('Создать открытую линию «edna MAX» в Битрикс24?', function() {
+    var btn = document.getElementById('createLineBtn');
+    btn.disabled = true;
+    btn.textContent = 'Создаём...';
+    fetch('/api/open-lines/create?member_id=' + encodeURIComponent(memberId), {method: 'POST'})
+      .then(function(r) {
+        if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
+        return r.json();
+      })
+      .then(function() { loadOpenLines(); })
+      .catch(function(e) {
+        btn.disabled = false;
+        btn.textContent = 'Создать линию';
+        showNotice('Ошибка: ' + e.message);
+      });
+  });
 }
 
 function editOpenLine() {
@@ -467,16 +499,17 @@ function saveChannel() {
 }
 
 function disconnect(channelId) {
-  if (!confirm('Отключить канал?')) return;
-  fetch('/api/channels/' + channelId + '/disconnect?member_id=' + encodeURIComponent(memberId), {
-    method: 'POST'
-  })
-  .then(function(r) {
-    if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
-    return r.json();
-  })
-  .then(function() { loadChannels(); })
-  .catch(function(e) { alert('Ошибка: ' + e.message); });
+  showConfirm('Отключить канал?', function() {
+    fetch('/api/channels/' + channelId + '/disconnect?member_id=' + encodeURIComponent(memberId), {
+      method: 'POST'
+    })
+    .then(function(r) {
+      if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
+      return r.json();
+    })
+    .then(function() { loadChannels(); })
+    .catch(function(e) { showNotice('Ошибка: ' + e.message); });
+  });
 }
 
 function showWebhookResult(data) {
@@ -541,6 +574,43 @@ function clearFieldErrors() {
     el.textContent = '';
     el.classList.add('d-none');
   });
+}
+
+// ---- Внутреннее модальное окно (замена браузерных confirm/alert) ----
+function showModal(opts) {
+  var backdrop = document.getElementById('modalBackdrop');
+  document.getElementById('modalTitle').textContent = opts.title || '';
+  document.getElementById('modalMessage').textContent = opts.message || '';
+  var okBtn = document.getElementById('modalOkBtn');
+  var cancelBtn = document.getElementById('modalCancelBtn');
+  okBtn.textContent = opts.okText || 'OK';
+  cancelBtn.textContent = opts.cancelText || 'Отмена';
+  cancelBtn.style.display = opts.showCancel ? '' : 'none';
+
+  function close() {
+    backdrop.classList.add('d-none');
+    okBtn.onclick = null;
+    cancelBtn.onclick = null;
+    backdrop.onclick = null;
+    document.onkeydown = null;
+  }
+  okBtn.onclick = function() { close(); if (opts.onOk) opts.onOk(); };
+  cancelBtn.onclick = function() { close(); };
+  backdrop.onclick = function(e) { if (e.target === backdrop) close(); };
+  document.onkeydown = function(e) { if (e.key === 'Escape') close(); };
+
+  backdrop.classList.remove('d-none');
+  okBtn.focus();
+}
+
+// Подтверждение действия (две кнопки) — замена confirm()
+function showConfirm(message, onOk) {
+  showModal({ message: message, showCancel: true, okText: 'OK', onOk: onOk });
+}
+
+// Уведомление (одна кнопка) — замена alert()
+function showNotice(message) {
+  showModal({ message: message, showCancel: false, okText: 'Понятно' });
 }
 
 function esc(s) {
