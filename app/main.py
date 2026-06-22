@@ -128,6 +128,17 @@ with engine.connect() as _conn:
         except Exception:
             _conn.rollback()
 
+# #2: store client identity on incoming messages so the "undelivered" notice
+# can be posted into the SAME Open Line dialog (matching original user.id/name)
+with engine.connect() as _conn:
+    for _col, _coltype in (("subscriber_user_id", "TEXT"), ("user_name", "TEXT")):
+        try:
+            _conn.execute(text(f"ALTER TABLE messages ADD COLUMN {_col} {_coltype}"))
+            _conn.commit()
+            logger.info("Migration: added messages.%s column", _col)
+        except Exception:
+            _conn.rollback()
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:

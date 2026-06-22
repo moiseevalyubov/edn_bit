@@ -72,6 +72,10 @@ class Message(Base):
     max_message_id = Column(String, nullable=True)
     bitrix_chat_id = Column(String, nullable=True)
     subscriber_identifier = Column(String, nullable=True)
+    # #2: client identity exactly as sent to Bitrix (user.id / name) on incoming
+    # messages — reused to post the "undelivered" notice into the SAME dialog.
+    subscriber_user_id = Column(String, nullable=True)
+    user_name = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
     raw_payload = Column(Text, nullable=True)
 

@@ -107,6 +107,9 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
             content_type=payload.get("content_type", "TEXT"),
             max_message_id=payload.get("msg_id"),
             subscriber_identifier=payload.get("subscriber_identifier"),
+            # #2: persist exact client identity sent to Bitrix (user.id / name)
+            subscriber_user_id=payload.get("user_id"),
+            user_name=payload.get("user_name"),
             sent_at=datetime.utcnow(),
             raw_payload=payload.get("raw_payload"),
         ))
@@ -208,6 +211,21 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
             )
             return
 
+        # Reuse the EXACT client identity from the latest incoming message so the notice
+        # lands in the existing dialog instead of spawning a new "Гость" contact.
+        orig = (
+            db.query(Message)
+            .filter_by(channel_id=channel_id, direction="incoming", subscriber_identifier=str(chat_id))
+            .order_by(Message.sent_at.desc())
+            .first()
+        )
+        if not orig or not orig.subscriber_user_id:
+            logger.warning(
+                "Undelivered notice skipped: no known client identity for chat %s (channel=%s)",
+                chat_id, channel_id,
+            )
+            return
+
         if payload.get("msg_type") == "media":
             notice = "⚠️ Файл не доставлен клиенту в MAX. Попробуйте отправить ещё раз."
         else:
@@ -218,7 +236,9 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
             db=db,
             line_id=int(line_id),
             chat_id=str(chat_id),
+            user_id=str(orig.subscriber_user_id),
             notice_text=notice,
+            user_name=orig.user_name,
         )
         logger.info("Undelivered notice sent to operator (channel=%s, chat=%s)", channel_id, chat_id)
     except Exception as e:
