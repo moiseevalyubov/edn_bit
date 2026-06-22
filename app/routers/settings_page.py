@@ -177,12 +177,13 @@ SETTINGS_HTML = """<!DOCTYPE html>
         </div>
         <div class="mb-3">
           <label class="form-label">API-ключ (X-API-KEY)</label>
+          <div class="form-text mb-2">Вставьте ваш API-ключ из edna — раздел <a href="https://app.edna.ru/integration/settings" target="_blank" rel="noopener">Интеграции → Настройки → Основной профиль ↗</a></div>
           <input type="text" class="form-control" id="apiKey" placeholder="Ваш API-ключ от edna">
         </div>
         <div class="mb-3">
           <label class="form-label">Sender ID</label>
+          <div class="form-text mb-2">Отображается в столбце «Отправитель» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener">списке каналов edna ↗</a></div>
           <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала MAX Bot">
-          <div class="form-text">Должен совпадать с названием подписки (subject) канала в личном кабинете edna.</div>
           <div id="senderError" class="text-danger small mt-1 d-none"></div>
         </div>
         <button class="btn btn-primary" id="saveBtn" onclick="saveChannel()">
