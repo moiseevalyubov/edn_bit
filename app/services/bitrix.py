@@ -32,7 +32,7 @@ async def register_connector(portal: Portal, db: Session) -> None:
         "imconnector.register",
         {
             "ID": CONNECTOR_ID,
-            "NAME": "MAX Bot",
+            "NAME": "edna MAX",
             "ICON": {
                 "DATA_IMAGE": (
                     "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22"
@@ -43,7 +43,7 @@ async def register_connector(portal: Portal, db: Session) -> None:
                 "COLOR": "#005FF9",
             },
             "PLACEMENT_HANDLER": f"{settings.app_base_url}/settings",
-            "COMMENT": "Подключение каналов MAX Bot к Открытым линиям",
+            "COMMENT": "Подключение каналов edna MAX к Открытым линиям",
         },
     )
 

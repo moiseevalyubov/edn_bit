@@ -14,7 +14,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MAX Bot — настройки</title>
+  <title>Настройки каналов</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -127,13 +127,13 @@ SETTINGS_HTML = """<!DOCTYPE html>
       Подписка Bitrix истекла. Канал может не работать в Открытых линиях.
     </div>
 
-    <h5 class="mb-4">MAX Bot — настройки</h5>
+    <h5 class="mb-4">Настройки каналов</h5>
 
     <!-- Open Line section -->
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">Открытая линия Битрикс24</div>
       <div class="card-body">
-        <p class="text-muted small mb-3">Сообщения от клиентов MAX Bot будут поступать в эту открытую линию.</p>
+        <p class="text-muted small mb-3">Сообщения от клиентов будут поступать в эту открытую линию.</p>
         <div id="openLineStatus"></div>
         <div id="openLineForm" class="d-none mt-2">
           <select class="form-select mb-2" id="lineSelect"></select>
@@ -172,18 +172,18 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <div id="formError" class="alert alert-danger d-none"></div>
         <div class="mb-3">
           <label class="form-label">Название канала</label>
-          <input type="text" class="form-control" id="channelName" placeholder="Например: MAX Bot продажи">
+          <input type="text" class="form-control" id="channelName" placeholder="Например: Продажи">
           <div id="nameError" class="text-danger small mt-1 d-none"></div>
         </div>
         <div class="mb-3">
           <label class="form-label">API-ключ (X-API-KEY)</label>
-          <div class="form-text mb-2">Вставьте ваш API-ключ из edna — раздел <a href="https://app.edna.ru/integration/settings" target="_blank" rel="noopener">Интеграции → Настройки → Основной профиль ↗</a></div>
+          <div class="form-text mb-2">Вставьте ваш API-ключ из edna - раздел <a href="https://app.edna.ru/integration/settings" target="_blank" rel="noopener">Интеграции → Настройки → Основной профиль ↗</a></div>
           <input type="text" class="form-control" id="apiKey" placeholder="Ваш API-ключ от edna">
         </div>
         <div class="mb-3">
           <label class="form-label">Sender ID</label>
           <div class="form-text mb-2">Отображается в столбце «Отправитель» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener">списке каналов edna ↗</a></div>
-          <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала MAX Bot">
+          <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала в edna">
           <div id="senderError" class="text-danger small mt-1 d-none"></div>
         </div>
         <button class="btn btn-primary" id="saveBtn" onclick="saveChannel()">
@@ -299,13 +299,13 @@ function renderOpenLine(data) {
   } else {
     status.innerHTML =
       '<span class="badge badge-warning rounded-pill me-2">Не создана</span>' +
-      'В вашем Битрикс24 нет открытых линий. Нажмите кнопку, чтобы создать линию «MAX Bot» автоматически.' +
+      'В вашем Битрикс24 нет открытых линий. Нажмите кнопку, чтобы создать линию «edna MAX» автоматически.' +
       ' <button class="btn btn-primary btn-sm ms-2" id="createLineBtn" onclick="createOpenLine()">Создать линию</button>';
   }
 }
 
 function createOpenLine() {
-  if (!confirm('Создать открытую линию «MAX Bot» в Битрикс24?')) return;
+  if (!confirm('Создать открытую линию «edna MAX» в Битрикс24?')) return;
   var btn = document.getElementById('createLineBtn');
   btn.disabled = true;
   btn.textContent = 'Создаём...';

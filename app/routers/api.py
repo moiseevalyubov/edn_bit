@@ -138,7 +138,7 @@ async def list_open_lines(member_id: str, db: Session = Depends(get_db)):
 async def create_line(member_id: str, db: Session = Depends(get_db)):
     portal = get_portal_or_404(member_id, db)
     try:
-        line_id = await create_open_line(portal, db, "MAX Bot")
+        line_id = await create_open_line(portal, db, "edna MAX")
         await activate_connector(portal, db, line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")

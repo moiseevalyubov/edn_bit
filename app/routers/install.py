@@ -84,14 +84,14 @@ async def install(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse("""
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>MAX Bot установлен</title></head>
+<head><meta charset="utf-8"><title>edna MAX установлен</title></head>
 <body style="font-family:sans-serif;padding:40px;text-align:center;background:#f5f5f5">
   <div style="background:white;padding:40px;border-radius:12px;max-width:500px;margin:0 auto;box-shadow:0 2px 8px rgba(0,0,0,.1)">
-    <h2 style="color:#005FF9">✓ MAX Bot успешно установлен</h2>
+    <h2 style="color:#005FF9">✓ edna MAX успешно установлен</h2>
     <p>Перейдите в настройки коннектора, чтобы:</p>
     <ol style="text-align:left;margin-top:12px">
       <li>Выбрать открытую линию Битрикс24</li>
-      <li>Подключить каналы MAX Bot</li>
+      <li>Подключить каналы edna MAX</li>
     </ol>
   </div>
   <script src="//api.bitrix24.com/api/v1/"></script>
