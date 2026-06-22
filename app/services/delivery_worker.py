@@ -226,10 +226,13 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
             )
             return
 
+        # Use the channel's edna type (e.g. MAX, WHATSAPP) captured at registration;
+        # fall back to "MAX" for older/manual channels with no stored type.
+        ch_type = channel.channel_type or "MAX"
         if payload.get("msg_type") == "media":
-            notice = "⚠️ Файл не доставлен клиенту в MAX. Попробуйте отправить ещё раз."
+            notice = f"⚠️ Файл не доставлен клиенту в {ch_type}. Попробуйте отправить ещё раз."
         else:
-            notice = "⚠️ Сообщение не доставлено клиенту в MAX. Попробуйте отправить ещё раз."
+            notice = f"⚠️ Сообщение не доставлено клиенту в {ch_type}. Попробуйте отправить ещё раз."
 
         await send_undelivered_notice(
             portal=portal,
