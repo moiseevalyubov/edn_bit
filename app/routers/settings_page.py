@@ -113,6 +113,33 @@ SETTINGS_HTML = """<!DOCTYPE html>
     }
     .form-label { font-weight: 600; font-size: 13px; color: var(--edna-text); }
 
+    /* ---- Блок помощи: плитки edna (зелёный акцент Positive500) ---- */
+    .help-block {
+      background: #f0faf5;
+      border: 1px solid #cdebdd;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 20px;
+    }
+    .help-block-title { font-size: 13px; font-weight: 600; color: var(--edna-text); margin-bottom: 12px; }
+    .help-tiles { display: flex; gap: 12px; flex-wrap: wrap; }
+    .help-tile {
+      flex: 1 1 220px;
+      display: block;
+      background: #fff;
+      border: 1px solid var(--edna-divider);
+      border-radius: 8px;
+      padding: 14px 16px;
+      text-decoration: none;
+      color: var(--edna-text);
+      box-shadow: 0 1px 4px -1px rgba(18,18,18,.12);
+      transition: box-shadow .15s, border-color .15s;
+    }
+    .help-tile:hover { box-shadow: 0 3px 10px -2px rgba(9,164,96,.22); border-color: var(--edna-green); color: var(--edna-text); }
+    .help-tile-name { font-weight: 600; font-size: 14px; color: var(--edna-text); }
+    .help-tile-name .arrow { color: var(--edna-green); }
+    .help-tile-sub { font-size: 12px; color: var(--edna-text-secondary); margin-top: 4px; }
+
     /* ---- Внутреннее модальное окно edna (вместо браузерных confirm/alert) ---- */
     .modal-backdrop-edna {
       position: fixed; inset: 0; z-index: 1050;
@@ -188,6 +215,19 @@ SETTINGS_HTML = """<!DOCTYPE html>
     <div class="card">
       <div class="card-header bg-white fw-semibold">Подключить новый канал</div>
       <div class="card-body">
+        <div class="help-block">
+          <div class="help-block-title">Ещё нет аккаунта или канала в edna? Начните отсюда:</div>
+          <div class="help-tiles">
+            <a class="help-tile" href="https://edna.ru/max/" target="_blank" rel="noopener">
+              <div class="help-tile-name">Подключиться к edna <span class="arrow">↗</span></div>
+              <div class="help-tile-sub">Зарегистрироваться и подключить MAX — edna.ru/max</div>
+            </a>
+            <a class="help-tile" href="https://docs-pulse.edna.ru/docs/channel/max/maxbot-connect" target="_blank" rel="noopener">
+              <div class="help-tile-name">Как подключить канал <span class="arrow">↗</span></div>
+              <div class="help-tile-sub">Пошаговая инструкция в базе знаний edna</div>
+            </a>
+          </div>
+        </div>
         <div id="formError" class="alert alert-danger d-none"></div>
         <div class="mb-3">
           <label class="form-label">Название канала</label>
