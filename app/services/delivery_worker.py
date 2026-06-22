@@ -6,9 +6,15 @@ from datetime import datetime, timedelta
 import httpx
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import Channel, Message, MessageDeliveryTask, Portal
-from app.services.bitrix import send_delivery_status, send_file_to_bitrix, send_message_to_bitrix
+from app.services.bitrix import (
+    send_delivery_status,
+    send_file_to_bitrix,
+    send_message_to_bitrix,
+    send_undelivered_notice,
+)
 from app.services.file_cache import get as file_cache_get, make_signed_url
 from app.services.maxbot import send_media, send_message
 from app.services.token import PaymentRequiredError
@@ -111,6 +117,11 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
 
 async def _execute_outgoing(channel_id: int, payload: dict) -> None:
     """Send a Bitrix24 message to edna, then save Message row + delivery status on success."""
+    # Test-only (#2): force a permanent failure to verify the operator's "undelivered"
+    # notice on a live portal. Enabled via EDNA_FORCE_FAIL=1 env var; off by default.
+    if settings.edna_force_fail == "1":
+        raise RuntimeError("EDNA_FORCE_FAIL: simulated permanent send failure")
+
     # RISK-1 mitigation: file cache may have expired — treat as permanent failure
     if payload.get("msg_type") == "media":
         file_key = payload.get("file_key")
@@ -177,6 +188,45 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
         db.close()
 
 
+async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: str) -> None:
+    """Best-effort: tell the Bitrix operator that an outgoing message wasn't delivered to MAX.
+
+    Called only when an outgoing (Bitrix → edna) task fails terminally (dead / file expired).
+    Failure to post the notice itself must never break the worker — hence best-effort.
+    """
+    db = SessionLocal()
+    try:
+        channel = db.query(Channel).filter_by(id=channel_id).first()
+        if not channel:
+            return
+        portal: Portal = channel.portal
+        chat_id = payload.get("max_id")
+        line_id = payload.get("line_id") or portal.open_line_id
+        if not chat_id or not line_id:
+            logger.warning(
+                "Undelivered notice skipped: missing chat_id/line_id (channel=%s)", channel_id
+            )
+            return
+
+        if payload.get("msg_type") == "media":
+            notice = "⚠️ Файл не доставлен клиенту в MAX. Попробуйте отправить ещё раз."
+        else:
+            notice = "⚠️ Сообщение не доставлено клиенту в MAX. Попробуйте отправить ещё раз."
+
+        await send_undelivered_notice(
+            portal=portal,
+            db=db,
+            line_id=int(line_id),
+            chat_id=str(chat_id),
+            notice_text=notice,
+        )
+        logger.info("Undelivered notice sent to operator (channel=%s, chat=%s)", channel_id, chat_id)
+    except Exception as e:
+        logger.warning("Undelivered notice failed (best-effort): %s", e)
+    finally:
+        db.close()
+
+
 async def _process_one_task() -> bool:
     """Pick the next due pending task, execute it, update status. Returns True if processed."""
     db = SessionLocal()
@@ -220,6 +270,8 @@ async def _process_one_task() -> bool:
         # RISK-1: file cache expired — permanent failure, no retry
         _update_status(task_id, "failed", error=str(e))
         logger.error("Task %d failed permanently (file cache expired): %s", task_id, e)
+        if task_type == "send_to_edna":
+            await _notify_outgoing_undelivered(channel_id, payload, str(e))
 
     except Exception as e:
         error_type = _classify_error(e)
@@ -228,6 +280,8 @@ async def _process_one_task() -> bool:
         if error_type == "permanent" or new_retry_count > len(RETRY_SCHEDULE):
             _update_status(task_id, "dead", error=str(e), retry_count=new_retry_count)
             logger.error("Task %d dead after %d attempts: %s", task_id, new_retry_count, e)
+            if task_type == "send_to_edna":
+                await _notify_outgoing_undelivered(channel_id, payload, str(e))
         else:
             delay = RETRY_SCHEDULE[new_retry_count - 1]
             next_attempt = datetime.utcnow() + timedelta(seconds=delay)

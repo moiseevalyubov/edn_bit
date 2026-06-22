@@ -174,6 +174,45 @@ async def send_file_to_bitrix(
     return result
 
 
+async def send_undelivered_notice(
+    portal: Portal,
+    db: Session,
+    line_id: int,
+    chat_id: str,
+    notice_text: str,
+) -> None:
+    """Show the operator that an outgoing message could NOT be delivered to MAX.
+
+    Bitrix connector API has no native "undelivered" status for outgoing messages —
+    only positive confirmations exist (delivery / reading). As a workaround we inject
+    a visible service notice into the same Open Line dialog (imconnector.send.messages),
+    so the operator notices the failure and can resend. The notice lands in the existing
+    session because chat.id matches the client's chat id used for incoming messages.
+    `disable_crm: Y` keeps it out of the CRM tracker.
+    """
+    await call_bitrix(
+        portal,
+        db,
+        "imconnector.send.messages",
+        {
+            "CONNECTOR": CONNECTOR_ID,
+            "LINE": line_id,
+            "MESSAGES": [
+                {
+                    "user": {"id": chat_id, "skip_phone_validate": "Y"},
+                    "message": {
+                        "id": f"undelivered-{int(time.time() * 1000)}",
+                        "date": int(time.time()),
+                        "text": notice_text,
+                        "disable_crm": "Y",
+                    },
+                    "chat": {"id": chat_id},
+                }
+            ],
+        },
+    )
+
+
 async def send_delivery_status(
     portal: Portal,
     db: Session,
