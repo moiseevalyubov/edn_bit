@@ -17,6 +17,89 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _bitrix_chat_id(channel: Channel, subscriber_identifier: str) -> str:
+    """#16: the chat id we report to Bitrix24 for this client.
+
+    MAX Bot and MAX identify the same person by the same identifier, so someone
+    writing to both channels of one portal would land in a single Open Line
+    dialog — and the operator's reply could not be routed back to the right
+    channel. Every channel type except the legacy MAX Bot gets its sender
+    prefixed to the id. Channels with an unknown type stay bare: they may be MAX
+    Bot channels whose type was never captured, and their dialogs must not break.
+    """
+    channel_type = (channel.channel_type or "").upper()
+    if not channel_type or channel_type == "MAX_BOT":
+        return subscriber_identifier
+    return f"{channel.sender}:{subscriber_identifier}"
+
+
+def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) -> str | None:
+    """#16: last known real name of this client across all channels of the portal.
+
+    MAX channels always send `userInfo: null`, so the name can only be learned
+    from another channel of the same portal. Names equal to the identifier are
+    placeholders we stored ourselves — skip them, or we'd "find" the same digits.
+    """
+    if not subscriber_identifier:
+        return None
+    row = (
+        db.query(Message.user_name)
+        .join(Channel, Message.channel_id == Channel.id)
+        .filter(
+            Channel.portal_id == channel.portal_id,
+            Message.direction == "incoming",
+            Message.subscriber_identifier == subscriber_identifier,
+            Message.user_name.isnot(None),
+            Message.user_name != subscriber_identifier,
+        )
+        .order_by(Message.sent_at.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def _remember_identity(
+    db: Session,
+    channel: Channel,
+    msg_id: str,
+    subscriber_id: str,
+    subscriber_identifier: str,
+    user_name: str,
+    data: dict,
+) -> None:
+    """#16: persist the client identity from a service message we don't forward.
+
+    `CONVERSATION_STARTED` ("/start") carries the client's name and is the first
+    thing a new client sends. Forwarding it to Bitrix would litter the dialog,
+    but dropping it silently costs us the only name a MAX-only client ever has.
+    Best-effort: a failure here must not break the webhook."""
+    if not subscriber_identifier:
+        return
+    if msg_id and db.query(Message).filter_by(
+        channel_id=channel.id, direction="incoming", max_message_id=msg_id
+    ).first():
+        return
+    try:
+        db.add(Message(
+            channel_id=channel.id,
+            direction="incoming",
+            content_type="CONVERSATION_STARTED",
+            max_message_id=msg_id or None,
+            subscriber_identifier=subscriber_identifier,
+            subscriber_user_id=subscriber_id or subscriber_identifier,
+            user_name=user_name,
+            raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
+        ))
+        db.commit()
+        logger.info(
+            "Incoming: CONVERSATION_STARTED — remembered identity %r for %s (channel %s)",
+            user_name, subscriber_identifier, channel.id,
+        )
+    except Exception as e:
+        db.rollback()
+        logger.warning("Incoming: failed to remember identity: %s", e)
+
+
 @router.api_route("/incoming", methods=["GET", "HEAD"])
 @router.api_route("/incoming/{webhook_token}", methods=["GET", "HEAD"])
 async def incoming_verify(webhook_token: str = ""):
@@ -34,7 +117,10 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
     body = await request.body()
-    logger.info("Incoming MAX Bot webhook (channel %s): %s", channel.id, body[:500])
+    logger.info(
+        "Incoming webhook (channel %s, type %s): %s",
+        channel.id, channel.channel_type or "unknown", body[:500],
+    )
 
     try:
         data = json.loads(body)
@@ -59,10 +145,6 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
 
     _ATTACHMENT_TYPES = {"IMAGE", "DOCUMENT", "AUDIO", "VIDEO", "VOICE"}
 
-    if msg_type not in ("TEXT", "LOCATION", *_ATTACHMENT_TYPES):
-        logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
-        return JSONResponse({"status": "ok"})
-
     subscriber = data.get("subscriber")
     if not isinstance(subscriber, dict):
         subscriber = {}
@@ -72,13 +154,32 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     user_info = data.get("userInfo")
     if not isinstance(user_info, dict):
         user_info = {}
+    # #16: MAX channels send userInfo=null — reuse the name we already know for
+    # this client from any channel of the portal before falling back to digits.
+    raw_name = user_info.get("userName") or user_info.get("firstName")
+    if not raw_name:
+        raw_name = _known_user_name(db, channel, subscriber_identifier)
     # SEC-10: strip HTML/JS, SEC-7: cap to 255 chars
-    user_name = sanitize_name(
-        user_info.get("userName") or user_info.get("firstName") or subscriber_identifier
-    )
+    user_name = sanitize_name(raw_name or subscriber_identifier)
 
     msg_id = str(data.get("id", ""))
-    chat_id = subscriber_identifier
+    chat_id = _bitrix_chat_id(channel, subscriber_identifier)
+    logger.info(
+        "Incoming: type=%s identifier=%s → chat_id=%s, user_name=%r",
+        msg_type, subscriber_identifier, chat_id, user_name,
+    )
+
+    # #16: not forwarded to Bitrix, but it is the only message carrying the name
+    # of a client who writes to a MAX channel only.
+    if msg_type == "CONVERSATION_STARTED":
+        _remember_identity(
+            db, channel, msg_id, subscriber_id, subscriber_identifier, user_name, data
+        )
+        return JSONResponse({"status": "ok"})
+
+    if msg_type not in ("TEXT", "LOCATION", *_ATTACHMENT_TYPES):
+        logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
+        return JSONResponse({"status": "ok"})
 
     if msg_id:
         # Dual dedup: check already-delivered (Message) and already-enqueued (MessageDeliveryTask)

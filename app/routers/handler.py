@@ -219,6 +219,17 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             logger.warning("Skipping msg: chat_id is empty")
             continue
 
+        # #16 (проба): a marked chat id ({sender}:{identifier}) belongs to a
+        # non-legacy channel whose outgoing format isn't implemented yet. Skip it
+        # rather than let the fallback below pick an arbitrary channel and push a
+        # malformed id to edna.
+        if ":" in str(chat_id):
+            logger.warning(
+                "Skipping msg: marked chat_id=%r — outgoing for this channel type "
+                "is not implemented yet (#16)", chat_id,
+            )
+            continue
+
         # Extract file attachment from Bitrix24 payload (files array)
         files = msg.get("message", {}).get("files", [])
         file_info = files[0] if files else None
