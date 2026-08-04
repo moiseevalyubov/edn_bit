@@ -72,6 +72,9 @@ class Message(Base):
     max_message_id = Column(String, nullable=True)
     bitrix_chat_id = Column(String, nullable=True)
     subscriber_identifier = Column(String, nullable=True)
+    # #16: type of subscriber_identifier (MAX_ID | PHONE) — MAX channels need it
+    # in the `to` block when sending. Read from the incoming `identifiers` array.
+    subscriber_id_type = Column(String, nullable=True)
     # #2: client identity exactly as sent to Bitrix (user.id / name) on incoming
     # messages — reused to post the "undelivered" notice into the SAME dialog.
     subscriber_user_id = Column(String, nullable=True)

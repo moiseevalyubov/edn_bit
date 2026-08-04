@@ -55,7 +55,8 @@
 | `content_type` | String | Тип: TEXT, IMAGE, DOCUMENT, AUDIO, VIDEO, VOICE, LOCATION |
 | `max_message_id` | String | ID сообщения в MAX Bot — уникален по `(channel_id, direction, max_message_id)` |
 | `bitrix_chat_id` | String | ID чата в Bitrix24 — ключевое поле для маршрутизации ответа |
-| `subscriber_identifier` | String | MAX ID пользователя в MAX Bot |
+| `subscriber_identifier` | String | Идентификатор клиента в edna — всегда «голый», без метки канала |
+| `subscriber_id_type` | String | Тип идентификатора: `MAX_ID` или `PHONE`. Нужен каналу MAX — он требует тип в блоке `to` при отправке. Пусто у старых записей → считается `MAX_ID` |
 | `subscriber_user_id` | String | ID пользователя, как отправлен в Bitrix (`user.id`) — для входящих; нужен, чтобы уведомление о недоставке легло в тот же диалог, а не создало нового «Гостя» |
 | `user_name` | String | Имя пользователя, как отправлено в Bitrix — для той же цели |
 | `sent_at` | DateTime | Когда отправлено |

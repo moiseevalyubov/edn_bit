@@ -16,7 +16,13 @@ from app.services.bitrix import (
     send_undelivered_notice,
 )
 from app.services.file_cache import get as file_cache_get, make_signed_url
-from app.services.maxbot import send_media, send_message
+from app.services.maxbot import (
+    VALID_ID_TYPES,
+    send_media,
+    send_media_max,
+    send_message,
+    send_message_max,
+)
 from app.services.token import PaymentRequiredError
 
 logger = logging.getLogger(__name__)
@@ -107,6 +113,8 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
             content_type=payload.get("content_type", "TEXT"),
             max_message_id=payload.get("msg_id"),
             subscriber_identifier=payload.get("subscriber_identifier"),
+            # #16: remembered so outgoing messages to a MAX channel can fill `to.type`
+            subscriber_id_type=payload.get("subscriber_id_type"),
             # #2: persist exact client identity sent to Bitrix (user.id / name)
             subscriber_user_id=payload.get("user_id"),
             user_name=payload.get("user_name"),
@@ -116,6 +124,36 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
         db.commit()
     finally:
         db.close()
+
+
+def _recipient_id_type(db: Session, channel_id: int, identifier: str) -> str:
+    """#16: is this recipient's identifier a MAX_ID or a PHONE?
+
+    Taken from the client's own latest incoming message. Scoped to `channel_id`
+    on purpose: MAX and MAX Bot use the SAME identifier for the same person, so
+    an unscoped lookup could pick up a row from the other channel.
+    Nothing stored (older rows, or the client never wrote first) → MAX_ID, which
+    is what every observed client uses. A type edna sends that we don't know how
+    to put in the `to` block falls back the same way, so one odd value can't turn
+    every reply to that client into a failed delivery."""
+    row = (
+        db.query(Message.subscriber_id_type)
+        .filter(
+            Message.channel_id == channel_id,
+            Message.direction == "incoming",
+            Message.subscriber_identifier == str(identifier),
+            Message.subscriber_id_type.isnot(None),
+        )
+        .order_by(Message.sent_at.desc())
+        .first()
+    )
+    id_type = row[0] if row else None
+    if id_type not in VALID_ID_TYPES:
+        if id_type:
+            logger.warning("Unknown identifier type %r for %s — falling back to MAX_ID",
+                           id_type, identifier)
+        return "MAX_ID"
+    return id_type
 
 
 async def _execute_outgoing(channel_id: int, payload: dict) -> None:
@@ -138,26 +176,55 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
             raise RuntimeError("Channel %d not found" % channel_id)
         portal: Portal = channel.portal
 
-        chat_id = payload["max_id"]
+        # #16: what edna needs — the bare client identifier, never the marked one.
+        max_id = payload["max_id"]
+        # MAX Bot keeps its own endpoint; so do legacy channels with no stored type,
+        # which are MAX Bot channels whose type was never captured. Every other edna
+        # channel type goes through the MAX endpoint, which also needs the type of
+        # the recipient's identifier.
+        channel_type = (channel.channel_type or "").upper()
+        use_max_endpoint = bool(channel_type) and channel_type != "MAX_BOT"
+        to_type = _recipient_id_type(db, channel_id, max_id) if use_max_endpoint else None
 
         if payload["msg_type"] == "media":
             file_url = make_signed_url(payload["file_key"])
-            await send_media(
-                api_key=channel.api_key,
-                sender=channel.sender,
-                max_id=chat_id,
-                content_type=payload["content_type"],
-                url=file_url,
-                name=payload["file_name"],
-                caption=payload.get("caption"),
-            )
+            if use_max_endpoint:
+                await send_media_max(
+                    api_key=channel.api_key,
+                    sender=channel.sender,
+                    to_value=max_id,
+                    to_type=to_type,
+                    content_type=payload["content_type"],
+                    url=file_url,
+                    name=payload["file_name"],
+                    caption=payload.get("caption"),
+                )
+            else:
+                await send_media(
+                    api_key=channel.api_key,
+                    sender=channel.sender,
+                    max_id=max_id,
+                    content_type=payload["content_type"],
+                    url=file_url,
+                    name=payload["file_name"],
+                    caption=payload.get("caption"),
+                )
         else:
-            await send_message(
-                api_key=channel.api_key,
-                sender=channel.sender,
-                max_id=chat_id,
-                text=payload["text"],
-            )
+            if use_max_endpoint:
+                await send_message_max(
+                    api_key=channel.api_key,
+                    sender=channel.sender,
+                    to_value=max_id,
+                    to_type=to_type,
+                    text=payload["text"],
+                )
+            else:
+                await send_message(
+                    api_key=channel.api_key,
+                    sender=channel.sender,
+                    max_id=max_id,
+                    text=payload["text"],
+                )
 
         db.add(Message(
             channel_id=channel_id,
@@ -165,7 +232,7 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
             text=payload.get("text") or payload.get("caption") or payload.get("file_name", ""),
             content_type=payload.get("content_type", "TEXT"),
             bitrix_chat_id=str(payload["im_chat_id"]) if payload.get("im_chat_id") else None,
-            subscriber_identifier=chat_id,
+            subscriber_identifier=max_id,
             sent_at=datetime.utcnow(),
             raw_payload=payload.get("raw_payload"),
         ))
@@ -183,7 +250,8 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
                     line_id=int(line_id),
                     bitrix_chat_id=int(im_chat_id),
                     bitrix_message_id=int(im_message_id),
-                    chat_id=chat_id,
+                    # #16: Bitrix knows this dialog by the marked id, not the bare one
+                    chat_id=str(payload.get("bitrix_chat_id") or max_id),
                 )
             except Exception as e:
                 logger.warning("Delivery status error (best-effort): %s", e)
@@ -203,9 +271,13 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
         if not channel:
             return
         portal: Portal = channel.portal
-        chat_id = payload.get("max_id")
+        max_id = payload.get("max_id")
+        # #16: the client's identity is stored against the BARE identifier, but the
+        # notice has to be posted into the dialog Bitrix knows — which for a MAX
+        # channel is the MARKED id. Sending the bare one would miss the dialog.
+        bitrix_chat_id = payload.get("bitrix_chat_id") or max_id
         line_id = payload.get("line_id") or portal.open_line_id
-        if not chat_id or not line_id:
+        if not max_id or not line_id:
             logger.warning(
                 "Undelivered notice skipped: missing chat_id/line_id (channel=%s)", channel_id
             )
@@ -215,14 +287,14 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
         # lands in the existing dialog instead of spawning a new "Гость" contact.
         orig = (
             db.query(Message)
-            .filter_by(channel_id=channel_id, direction="incoming", subscriber_identifier=str(chat_id))
+            .filter_by(channel_id=channel_id, direction="incoming", subscriber_identifier=str(max_id))
             .order_by(Message.sent_at.desc())
             .first()
         )
         if not orig or not orig.subscriber_user_id:
             logger.warning(
                 "Undelivered notice skipped: no known client identity for chat %s (channel=%s)",
-                chat_id, channel_id,
+                max_id, channel_id,
             )
             return
 
@@ -238,12 +310,14 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
             portal=portal,
             db=db,
             line_id=int(line_id),
-            chat_id=str(chat_id),
+            chat_id=str(bitrix_chat_id),
             user_id=str(orig.subscriber_user_id),
             notice_text=notice,
             user_name=orig.user_name,
         )
-        logger.info("Undelivered notice sent to operator (channel=%s, chat=%s)", channel_id, chat_id)
+        logger.info(
+            "Undelivered notice sent to operator (channel=%s, chat=%s)", channel_id, bitrix_chat_id
+        )
     except Exception as e:
         logger.warning("Undelivered notice failed (best-effort): %s", e)
     finally:
@@ -368,6 +442,7 @@ def enqueue_incoming(
     content_type: str,
     subscriber_identifier: str,
     raw_payload: str,
+    subscriber_id_type: str | None = None,
     text: str | None = None,
     file_url: str | None = None,
     file_name: str | None = None,
@@ -382,6 +457,7 @@ def enqueue_incoming(
         "msg_id": msg_id,
         "content_type": content_type,
         "subscriber_identifier": subscriber_identifier,
+        "subscriber_id_type": subscriber_id_type,
         "raw_payload": raw_payload,
         "text": text,
         "file_url": file_url,
@@ -408,6 +484,7 @@ def enqueue_outgoing(
     msg_type: str,
     max_id: str,
     raw_payload: str,
+    bitrix_chat_id: str | None = None,
     im_chat_id: str | None = None,
     im_message_id: str | None = None,
     line_id: str | None = None,
@@ -417,10 +494,15 @@ def enqueue_outgoing(
     file_name: str | None = None,
     caption: str | None = None,
 ) -> MessageDeliveryTask:
-    """Enqueue an outgoing Bitrix24 message for delivery to edna/MAX Bot."""
+    """Enqueue an outgoing Bitrix24 message for delivery to edna/MAX Bot.
+
+    #16: `max_id` is the BARE client identifier (what edna expects), while
+    `bitrix_chat_id` is the id Bitrix knows this dialog by — for MAX channels it
+    carries the channel marker. They are equal for MAX Bot."""
     payload = {
         "msg_type": msg_type,
         "max_id": max_id,
+        "bitrix_chat_id": bitrix_chat_id or max_id,
         "im_chat_id": im_chat_id,
         "im_message_id": im_message_id,
         "line_id": line_id,

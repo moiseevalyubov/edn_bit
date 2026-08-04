@@ -33,6 +33,27 @@ def _bitrix_chat_id(channel: Channel, subscriber_identifier: str) -> str:
     return f"{channel.sender}:{subscriber_identifier}"
 
 
+def _identifier_type(subscriber: dict, subscriber_identifier: str) -> str:
+    """#16: type of the client's primary identifier — MAX_ID or PHONE.
+
+    Both MAX and MAX Bot send an `identifiers` array, but it may list several
+    entries (e.g. MAX_ID plus PHONE when edna has merged the profile) and PHONE
+    is not always present. The type we need is the one belonging to the entry
+    that matches `subscriber.identifier` — the id we actually reply to.
+    Unknown or missing array → MAX_ID, which is what every observed client uses.
+    """
+    identifiers = subscriber.get("identifiers")
+    if isinstance(identifiers, list):
+        for item in identifiers:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("value", "")) == subscriber_identifier:
+                id_type = str(item.get("type") or "").upper()
+                if id_type:
+                    return id_type
+    return "MAX_ID"
+
+
 def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) -> str | None:
     """#16: last known real name of this client across all channels of the portal.
 
@@ -64,6 +85,7 @@ def _remember_identity(
     msg_id: str,
     subscriber_id: str,
     subscriber_identifier: str,
+    subscriber_id_type: str,
     user_name: str,
     data: dict,
 ) -> None:
@@ -86,6 +108,7 @@ def _remember_identity(
             content_type="CONVERSATION_STARTED",
             max_message_id=msg_id or None,
             subscriber_identifier=subscriber_identifier,
+            subscriber_id_type=subscriber_id_type,
             subscriber_user_id=subscriber_id or subscriber_identifier,
             user_name=user_name,
             raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
@@ -150,6 +173,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         subscriber = {}
     subscriber_id = str(subscriber.get("id", ""))
     subscriber_identifier = str(subscriber.get("identifier", ""))
+    subscriber_id_type = _identifier_type(subscriber, subscriber_identifier)
 
     user_info = data.get("userInfo")
     if not isinstance(user_info, dict):
@@ -165,15 +189,16 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     msg_id = str(data.get("id", ""))
     chat_id = _bitrix_chat_id(channel, subscriber_identifier)
     logger.info(
-        "Incoming: type=%s identifier=%s → chat_id=%s, user_name=%r",
-        msg_type, subscriber_identifier, chat_id, user_name,
+        "Incoming: type=%s identifier=%s (%s) → chat_id=%s, user_name=%r",
+        msg_type, subscriber_identifier, subscriber_id_type, chat_id, user_name,
     )
 
     # #16: not forwarded to Bitrix, but it is the only message carrying the name
     # of a client who writes to a MAX channel only.
     if msg_type == "CONVERSATION_STARTED":
         _remember_identity(
-            db, channel, msg_id, subscriber_id, subscriber_identifier, user_name, data
+            db, channel, msg_id, subscriber_id, subscriber_identifier,
+            subscriber_id_type, user_name, data,
         )
         return JSONResponse({"status": "ok"})
 
@@ -219,6 +244,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 msg_id=msg_id,
                 content_type=msg_type,
                 subscriber_identifier=subscriber_identifier,
+                subscriber_id_type=subscriber_id_type,
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
                 file_url=file_url,
                 file_name=file_name,
@@ -258,6 +284,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 msg_id=msg_id,
                 content_type="LOCATION",
                 subscriber_identifier=subscriber_identifier,
+                subscriber_id_type=subscriber_id_type,
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
                 text=text,
             )
@@ -286,6 +313,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 msg_id=msg_id,
                 content_type="TEXT",
                 subscriber_identifier=subscriber_identifier,
+                subscriber_id_type=subscriber_id_type,
                 raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
                 text=text,
             )

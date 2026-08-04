@@ -219,17 +219,6 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             logger.warning("Skipping msg: chat_id is empty")
             continue
 
-        # #16 (проба): a marked chat id ({sender}:{identifier}) belongs to a
-        # non-legacy channel whose outgoing format isn't implemented yet. Skip it
-        # rather than let the fallback below pick an arbitrary channel and push a
-        # malformed id to edna.
-        if ":" in str(chat_id):
-            logger.warning(
-                "Skipping msg: marked chat_id=%r — outgoing for this channel type "
-                "is not implemented yet (#16)", chat_id,
-            )
-            continue
-
         # Extract file attachment from Bitrix24 payload (files array)
         files = msg.get("message", {}).get("files", [])
         file_info = files[0] if files else None
@@ -241,25 +230,49 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             logger.warning("Skipping msg: no text and no attachment (raw=%r)", raw_text[:200])
             continue
 
-        # Find active channel by subscriber_identifier (= chat_id)
-        channel = (
-            db.query(Channel)
-            .filter_by(portal_id=portal.id, is_active=True)
-            .join(Message, isouter=True)
-            .filter(Message.subscriber_identifier == chat_id)
-            .order_by(Message.sent_at.desc())
-            .first()
+        # #16: a marked chat id ({sender}:{identifier}) names its channel outright —
+        # matched by sender rather than channel id, so reconnecting a channel doesn't
+        # orphan its dialogs. The bare form is the legacy MAX Bot one and is still
+        # resolved through message history. Split on the LAST colon: the identifier
+        # is digits, the sender may itself contain underscores and digits.
+        bitrix_chat_id = str(chat_id)
+        if ":" in bitrix_chat_id:
+            sender, _, max_id = bitrix_chat_id.rpartition(":")
+            channel = db.query(Channel).filter_by(
+                portal_id=portal.id, sender=sender, is_active=True
+            ).first()
+            if not channel:
+                logger.warning(
+                    "Skipping msg: no active channel with sender=%r for chat_id=%r",
+                    sender, bitrix_chat_id,
+                )
+                continue
+        else:
+            max_id = bitrix_chat_id
+            # Find active channel by subscriber_identifier (= chat_id)
+            channel = (
+                db.query(Channel)
+                .filter_by(portal_id=portal.id, is_active=True)
+                .join(Message, isouter=True)
+                .filter(Message.subscriber_identifier == max_id)
+                .order_by(Message.sent_at.desc())
+                .first()
+            )
+
+            if not channel:
+                # Fallback: use first active channel of this portal
+                channel = db.query(Channel).filter_by(portal_id=portal.id, is_active=True).first()
+                if channel:
+                    logger.info("Using fallback channel (id=%d) for chat_id=%s", channel.id, max_id)
+
+            if not channel:
+                logger.warning("No active channel for portal %s, chat %s", portal.member_id, max_id)
+                continue
+
+        logger.info(
+            "Outgoing: chat_id=%r → channel=%d (%s), max_id=%s",
+            bitrix_chat_id, channel.id, channel.channel_type or "unknown", max_id,
         )
-
-        if not channel:
-            # Fallback: use first active channel of this portal
-            channel = db.query(Channel).filter_by(portal_id=portal.id, is_active=True).first()
-            if channel:
-                logger.info("Using fallback channel (id=%d) for chat_id=%s", channel.id, chat_id)
-
-        if not channel:
-            logger.warning("No active channel for portal %s, chat %s", portal.member_id, chat_id)
-            continue
 
         if file_info:
             bitrix_url = file_info.get("downloadLink") or file_info.get("link", "")
@@ -290,7 +303,8 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
                 db=db,
                 channel=channel,
                 msg_type="media",
-                max_id=chat_id,
+                max_id=max_id,
+                bitrix_chat_id=bitrix_chat_id,
                 raw_payload=str(data)[:2000],
                 im_chat_id=str(im_chat_id) if im_chat_id else None,
                 im_message_id=str(im_message_id) if im_message_id else None,
@@ -307,7 +321,8 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             db=db,
             channel=channel,
             msg_type="text",
-            max_id=chat_id,
+            max_id=max_id,
+            bitrix_chat_id=bitrix_chat_id,
             raw_payload=str(data)[:2000],
             im_chat_id=str(im_chat_id) if im_chat_id else None,
             im_message_id=str(im_message_id) if im_message_id else None,

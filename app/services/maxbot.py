@@ -4,7 +4,12 @@ import httpx
 
 EDNA_API_BASE = "https://app.edna.ru/api"
 MAXBOT_API_URL = f"{EDNA_API_BASE}/v1/out-messages/max-bot"
+# #16: the MAX channel is a different edna channel type with its own endpoint and
+# body format. Sending to it through the MAX Bot endpoint is rejected outright
+# ("default.subject.not_found"), so the two must never be mixed up.
+MAX_API_URL = f"{EDNA_API_BASE}/v1/out-messages/max"
 VALID_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "DOCUMENT"}
+VALID_ID_TYPES = {"MAX_ID", "PHONE"}
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +58,61 @@ async def send_media(api_key: str, sender: str, max_id: str, content_type: str, 
     if caption is not None:
         content["caption"] = caption
     return await _post(api_key, sender, max_id, content)
+
+
+# --- #16: MAX channel (separate endpoint and body format from MAX Bot) ---
+
+
+async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, content: dict) -> dict:
+    """POST /v1/out-messages/max — same idea as _post, different body shape.
+
+    MAX Bot sends {"sender", "maxId", "content"}; MAX sends {"from", "to", "content"}
+    where `to` is an object carrying the id AND its type (MAX_ID or PHONE)."""
+    if to_type not in VALID_ID_TYPES:
+        raise ValueError(f"Invalid to_type '{to_type}'. Must be one of {VALID_ID_TYPES}")
+    payload = {"from": sender, "to": {"value": to_value, "type": to_type}, "content": content}
+    logger.info("edna MAX request payload: %s", payload)
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            MAX_API_URL,
+            headers={"Content-Type": "application/json", "X-API-KEY": api_key},
+            json=payload,
+            timeout=10,
+        )
+    if not response.is_success:
+        logger.error("edna MAX error %s: %s", response.status_code, response.text[:500])
+    response.raise_for_status()
+    return response.json()
+
+
+async def send_message_max(api_key: str, sender: str, to_value: str, to_type: str, text: str) -> dict:
+    return await _post_max(api_key, sender, to_value, to_type, {"type": "TEXT", "text": text})
+
+
+async def send_media_max(
+    api_key: str,
+    sender: str,
+    to_value: str,
+    to_type: str,
+    content_type: str,
+    url: str,
+    name: str,
+    caption: str | None = None,
+) -> dict:
+    """Media message to a MAX channel.
+
+    The MAX docs list IMAGE / VIDEO / DOCUMENT; AUDIO is sent as-is and, if edna
+    rejects it, the operator gets the "undelivered" notice — see the open question
+    in review.md (#16). The caption field is assumed to match MAX Bot (`caption`)
+    and still needs confirming on a live channel."""
+    if content_type not in VALID_MEDIA_TYPES:
+        raise ValueError(f"Invalid content_type '{content_type}'. Must be one of {VALID_MEDIA_TYPES}")
+    if not url or not name:
+        raise ValueError("url and name must be non-empty strings")
+    content = {"type": content_type, "url": url}
+    if caption is not None:
+        content["caption"] = caption
+    return await _post_max(api_key, sender, to_value, to_type, content)
 
 
 # --- Channel / callback management (used to auto-configure the webhook URL) ---

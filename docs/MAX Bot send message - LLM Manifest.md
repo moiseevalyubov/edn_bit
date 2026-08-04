@@ -14,6 +14,38 @@
 POST https://app.edna.ru/api/v1/out-messages/max-bot
 ```
 
+### Канал MAX — отдельный эндпоинт
+
+Тип канала **MAX** (не путать с MAX Bot) использует свой эндпоинт и свой формат тела:
+
+```
+POST https://app.edna.ru/api/v1/out-messages/max
+```
+
+| Поле | MAX Bot | MAX |
+|---|---|---|
+| Отправитель | `"sender": "<subject>"` | `"from": "<subject>"` |
+| Получатель | `"maxId": "<id>"` | `"to": {"value": "<id>", "type": "MAX_ID"\|"PHONE"}` |
+| Контент | `"content": {...}` | `"content": {...}` — так же |
+
+```json
+{
+  "from": "79623693343_max_lm",
+  "to": {"value": "390309887", "type": "MAX_ID"},
+  "content": {"type": "TEXT", "text": "Здравствуйте!"}
+}
+```
+
+Аутентификация и типы контента — те же, что ниже. **Перепутать эндпоинты нельзя:** при отправке в канал MAX через `/max-bot` edna возвращает
+
+```json
+{"code": "default.subject.not_found", "context": {"parameters": {"channel": "MAX_BOT", "sender": "..."}}}
+```
+
+Тип получателя (`to.type`) берётся из массива `subscriber.identifiers` входящего вебхука — см. манифест входящих.
+
+⚠️ **Требует проверки на живом канале:** поддерживает ли MAX типы `AUDIO`/`VOICE` (в документации перечислены `IMAGE`/`VIDEO`/`DOCUMENT`) и как называется поле подписи к файлу — `caption` (как у MAX Bot) или `text`.
+
 ---
 
 ## Authentication

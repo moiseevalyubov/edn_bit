@@ -139,6 +139,17 @@ with engine.connect() as _conn:
         except Exception:
             _conn.rollback()
 
+# #16: remember whether the client's identifier is a MAX_ID or a PHONE — the MAX
+# channel needs the type in the `to` block when sending. Nullable: older rows fall
+# back to MAX_ID, so no backfill is required.
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("ALTER TABLE messages ADD COLUMN subscriber_id_type TEXT"))
+        _conn.commit()
+        logger.info("Migration: added messages.subscriber_id_type column")
+    except Exception:
+        _conn.rollback()
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:
