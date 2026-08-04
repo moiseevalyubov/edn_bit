@@ -10,6 +10,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -249,10 +250,19 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
                 continue
         else:
             max_id = bitrix_chat_id
-            # Find active channel by subscriber_identifier (= chat_id)
+            # A bare chat id can only have come from a channel that SENDS bare ids —
+            # MAX Bot, or a channel whose type was never captured. Restricting the
+            # search to those is essential, not cosmetic: the identifier itself is
+            # identical across MAX and MAX Bot, so an unrestricted lookup returns
+            # whichever channel this client last exchanged a message through, and a
+            # reply typed into the MAX Bot dialog goes out over MAX.
+            legacy_channel = or_(
+                Channel.channel_type.is_(None),
+                func.upper(Channel.channel_type) == "MAX_BOT",
+            )
             channel = (
                 db.query(Channel)
-                .filter_by(portal_id=portal.id, is_active=True)
+                .filter(Channel.portal_id == portal.id, Channel.is_active.is_(True), legacy_channel)
                 .join(Message, isouter=True)
                 .filter(Message.subscriber_identifier == max_id)
                 .order_by(Message.sent_at.desc())
@@ -260,13 +270,21 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             )
 
             if not channel:
-                # Fallback: use first active channel of this portal
-                channel = db.query(Channel).filter_by(portal_id=portal.id, is_active=True).first()
+                # Fallback: first legacy channel of this portal. Marked-id channels
+                # stay out of it — sending there would be a guess, and a wrong guess
+                # delivers the operator's reply to the wrong messenger.
+                channel = (
+                    db.query(Channel)
+                    .filter(Channel.portal_id == portal.id, Channel.is_active.is_(True), legacy_channel)
+                    .first()
+                )
                 if channel:
                     logger.info("Using fallback channel (id=%d) for chat_id=%s", channel.id, max_id)
 
             if not channel:
-                logger.warning("No active channel for portal %s, chat %s", portal.member_id, max_id)
+                logger.warning(
+                    "No active MAX Bot channel for portal %s, chat %s", portal.member_id, max_id
+                )
                 continue
 
         logger.info(
