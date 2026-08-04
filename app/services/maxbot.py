@@ -22,11 +22,25 @@ class WebhookSetupError(Exception):
     `fatal=True` means the channel can never work as configured (wrong Sender ID,
     invalid key, channel not active) — the caller must NOT create the channel.
     `fatal=False` means a transient problem (edna/network/proxy/cold start) — the
-    caller still creates the channel and falls back to manual URL setup."""
+    caller still creates the channel and falls back to manual URL setup.
 
-    def __init__(self, message: str, fatal: bool = True):
+    `subject_id` / `channel_type` carry whatever we already learned before failing.
+    Registration has two steps — read the channel list (which is where the type comes
+    from), then register the callback URL — and only the second one tends to fail.
+    Throwing that knowledge away left channels with an unknown type, which the
+    outgoing router then has to guess at."""
+
+    def __init__(
+        self,
+        message: str,
+        fatal: bool = True,
+        subject_id: int | None = None,
+        channel_type: str | None = None,
+    ):
         super().__init__(message)
         self.fatal = fatal
+        self.subject_id = subject_id
+        self.channel_type = channel_type
 
 
 async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
@@ -225,6 +239,10 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
             fatal=True,
         )
 
+    # From here on the channel is identified: even if registering the callback URL
+    # fails, the caller can still store what we know (see WebhookSetupError).
+    channel_type = match.get("type")
+
     # --- 2) Установка callback URL ---
     try:
         result = await set_in_message_callback(api_key, subject_id, callback_url)
@@ -236,18 +254,22 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
             )
         raise WebhookSetupError(
             f"edna вернула ошибку {status} при установке webhook. Попробуйте ещё раз позже.",
-            fatal=False,
+            fatal=False, subject_id=subject_id, channel_type=channel_type,
         )
     except httpx.HTTPError as e:
         raise WebhookSetupError(
             f"Не удалось связаться с edna при установке webhook ({type(e).__name__}). "
             "Попробуйте ещё раз чуть позже.",
-            fatal=False,
+            fatal=False, subject_id=subject_id, channel_type=channel_type,
         )
     code = result.get("code") if isinstance(result, dict) else None
     if code != "ok":
         # error-subject-unknown = битый конфиг канала → блокируем; остальные коды
         # (наш URL/доступность) — временные, оставляем ручной фолбэк.
-        raise WebhookSetupError(_callback_error_message(code), fatal=(code == "error-subject-unknown"))
+        raise WebhookSetupError(
+            _callback_error_message(code),
+            fatal=(code == "error-subject-unknown"),
+            subject_id=subject_id, channel_type=channel_type,
+        )
 
-    return {"subject_id": subject_id, "type": match.get("type")}
+    return {"subject_id": subject_id, "type": channel_type}

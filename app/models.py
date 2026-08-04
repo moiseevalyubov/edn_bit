@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func, or_
 from sqlalchemy import types
 from sqlalchemy.orm import relationship
 
@@ -59,6 +59,29 @@ class Channel(Base):
 
     portal = relationship("Portal", back_populates="channels")
     messages = relationship("Message", back_populates="channel")
+
+
+# #16: MAX Bot is the legacy channel format — bare chat ids towards Bitrix24 and the
+# /out-messages/max-bot endpoint towards edna. Every other edna channel type gets a
+# marked chat id ({sender}:{identifier}) and the /out-messages/max endpoint.
+#
+# A channel with no stored type counts as MAX Bot. That is the failure-safe direction:
+# assuming MAX Bot for a channel that is really MAX makes edna reject the send loudly
+# (default.subject.not_found) and the operator gets the "undelivered" notice, whereas
+# assuming MAX for a real MAX Bot channel would split that client's Bitrix dialogs and
+# cut their history in half. Since the type is now stored even when webhook
+# registration fails, and old rows were backfilled, this should stay rare.
+MAX_BOT_TYPE = "MAX_BOT"
+
+
+def is_max_bot_channel(channel: Channel) -> bool:
+    """Does this channel use the legacy MAX Bot format? See MAX_BOT_TYPE above."""
+    return (channel.channel_type or MAX_BOT_TYPE).upper() == MAX_BOT_TYPE
+
+
+def max_bot_channel_filter():
+    """The same rule as a SQL filter, for queries that pick a channel."""
+    return or_(Channel.channel_type.is_(None), func.upper(Channel.channel_type) == MAX_BOT_TYPE)
 
 
 class Message(Base):

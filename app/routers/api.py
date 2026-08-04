@@ -90,8 +90,16 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
         if e.fatal:
             logger.info("Channel (sender=%s): auto webhook setup blocked creation: %s", body.sender, e)
             raise HTTPException(status_code=422, detail=f"Автоматическая настройка не удалась: {e}")
+        # Keep whatever the failed attempt already learned: the channel type decides
+        # which edna endpoint replies go to, and guessing it later is worse than
+        # having no webhook (which the user can still set manually).
+        subject_id = e.subject_id
+        channel_type = e.channel_type
         auto_error = str(e)
-        logger.warning("Channel (sender=%s): auto webhook setup failed (transient): %s", body.sender, e)
+        logger.warning(
+            "Channel (sender=%s): auto webhook setup failed (transient, type=%s): %s",
+            body.sender, channel_type or "unknown", e,
+        )
     except Exception as e:
         auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
         logger.warning(

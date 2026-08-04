@@ -10,12 +10,11 @@ import httpx
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import Channel, Message, Portal, SeenEvent
+from app.models import Channel, Message, Portal, SeenEvent, max_bot_channel_filter
 from app.services.delivery_worker import enqueue_outgoing
 from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
@@ -251,15 +250,12 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
         else:
             max_id = bitrix_chat_id
             # A bare chat id can only have come from a channel that SENDS bare ids —
-            # MAX Bot, or a channel whose type was never captured. Restricting the
-            # search to those is essential, not cosmetic: the identifier itself is
-            # identical across MAX and MAX Bot, so an unrestricted lookup returns
-            # whichever channel this client last exchanged a message through, and a
-            # reply typed into the MAX Bot dialog goes out over MAX.
-            legacy_channel = or_(
-                Channel.channel_type.is_(None),
-                func.upper(Channel.channel_type) == "MAX_BOT",
-            )
+            # a MAX Bot one. Restricting the search to those is essential, not
+            # cosmetic: the identifier itself is identical across MAX and MAX Bot, so
+            # an unrestricted lookup returns whichever channel this client last
+            # exchanged a message through, and a reply typed into the MAX Bot dialog
+            # goes out over MAX.
+            legacy_channel = max_bot_channel_filter()
             channel = (
                 db.query(Channel)
                 .filter(Channel.portal_id == portal.id, Channel.is_active.is_(True), legacy_channel)

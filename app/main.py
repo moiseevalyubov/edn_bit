@@ -150,6 +150,20 @@ with engine.connect() as _conn:
     except Exception:
         _conn.rollback()
 
+# #16: channels created before MAX support could only ever be MAX Bot ones, so label
+# them explicitly instead of leaving every router to assume it. One-time and idempotent.
+with engine.connect() as _conn:
+    try:
+        _res = _conn.execute(text(
+            "UPDATE channels SET channel_type = 'MAX_BOT' WHERE channel_type IS NULL"
+        ))
+        _conn.commit()
+        if _res.rowcount:
+            logger.info("Migration: labelled %d channels with no type as MAX_BOT", _res.rowcount)
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Migration: MAX_BOT backfill skipped: %s", _e)
+
 logger.info("DATABASE_URL configured: %s", settings.database_url.split("@")[-1])
 
 if settings.app_base_url:

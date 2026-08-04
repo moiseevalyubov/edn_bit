@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Channel, Message, MessageDeliveryTask, Portal
+from app.models import Channel, Message, MessageDeliveryTask, Portal, is_max_bot_channel
 from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
 from app.services.sanitize import sanitize_name, sanitize_text
@@ -23,12 +23,10 @@ def _bitrix_chat_id(channel: Channel, subscriber_identifier: str) -> str:
     MAX Bot and MAX identify the same person by the same identifier, so someone
     writing to both channels of one portal would land in a single Open Line
     dialog — and the operator's reply could not be routed back to the right
-    channel. Every channel type except the legacy MAX Bot gets its sender
-    prefixed to the id. Channels with an unknown type stay bare: they may be MAX
-    Bot channels whose type was never captured, and their dialogs must not break.
+    channel. Every channel except the legacy MAX Bot gets its sender prefixed to
+    the id; see `is_max_bot_channel` for what counts as legacy and why.
     """
-    channel_type = (channel.channel_type or "").upper()
-    if not channel_type or channel_type == "MAX_BOT":
+    if is_max_bot_channel(channel):
         return subscriber_identifier
     return f"{channel.sender}:{subscriber_identifier}"
 

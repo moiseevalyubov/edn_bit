@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Channel, Message, MessageDeliveryTask, Portal
+from app.models import Channel, Message, MessageDeliveryTask, Portal, is_max_bot_channel
 from app.services.bitrix import (
     send_delivery_status,
     send_file_to_bitrix,
@@ -178,12 +178,9 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
 
         # #16: what edna needs — the bare client identifier, never the marked one.
         max_id = payload["max_id"]
-        # MAX Bot keeps its own endpoint; so do legacy channels with no stored type,
-        # which are MAX Bot channels whose type was never captured. Every other edna
-        # channel type goes through the MAX endpoint, which also needs the type of
-        # the recipient's identifier.
-        channel_type = (channel.channel_type or "").upper()
-        use_max_endpoint = bool(channel_type) and channel_type != "MAX_BOT"
+        # MAX Bot keeps its own endpoint; every other edna channel type goes through
+        # the MAX endpoint, which also needs the type of the recipient's identifier.
+        use_max_endpoint = not is_max_bot_channel(channel)
         to_type = _recipient_id_type(db, channel_id, max_id) if use_max_endpoint else None
 
         if payload["msg_type"] == "media":
