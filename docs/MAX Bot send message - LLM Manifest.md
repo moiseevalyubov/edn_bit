@@ -36,15 +36,36 @@ POST https://app.edna.ru/api/v1/out-messages/max
 }
 ```
 
-Аутентификация и типы контента — те же, что ниже. **Перепутать эндпоинты нельзя:** при отправке в канал MAX через `/max-bot` edna возвращает
+Аутентификация — та же, что ниже, а вот **контент у MAX свой** (проверено на живом канале 2026-08-05):
+
+| | MAX Bot | MAX |
+|---|---|---|
+| Типы контента | `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `VOICE`, `DOCUMENT` | только `TEXT`, `IMAGE`, `VIDEO`, `DOCUMENT` |
+| Подпись к файлу | `caption` | **`text`** |
+| Имя файла | `name` (обязательно) | поля нет |
+
+Две ловушки, обе стоили времени:
+
+1. **`caption` в канал MAX слать бесполезно** — edna не ругается, а молча выбрасывает поле, и текст оператора теряется. Подпись у MAX называется `text`.
+2. **`VOICE`/`AUDIO` MAX не принимает** — `400 {"code": "default.request.input_invalid"}`. Мы отправляем такие файлы как `DOCUMENT` (`MAX_MEDIA_TYPE_FALLBACK` в [maxbot.py](../app/services/maxbot.py)): клиент получит вложение и сможет его прослушать. Доставить документом лучше, чем не доставить.
+
+```json
+{
+  "from": "79623693343_max_lm",
+  "to": {"value": "390309887", "type": "MAX_ID"},
+  "content": {"type": "IMAGE", "url": "https://...jpg", "text": "подпись к картинке"}
+}
+```
+
+Ответ: `{"outMessageId": "...", "maxId": "..."}` (или `phone` вместо `maxId`). Документация: [sending-max](https://docs-pulse.edna.ru/docs/api/messages/sending-max).
+
+**Перепутать эндпоинты нельзя:** при отправке в канал MAX через `/max-bot` edna возвращает
 
 ```json
 {"code": "default.subject.not_found", "context": {"parameters": {"channel": "MAX_BOT", "sender": "..."}}}
 ```
 
 Тип получателя (`to.type`) берётся из массива `subscriber.identifiers` входящего вебхука — см. манифест входящих.
-
-⚠️ **Требует проверки на живом канале:** поддерживает ли MAX типы `AUDIO`/`VOICE` (в документации перечислены `IMAGE`/`VIDEO`/`DOCUMENT`) и как называется поле подписи к файлу — `caption` (как у MAX Bot) или `text`.
 
 ---
 

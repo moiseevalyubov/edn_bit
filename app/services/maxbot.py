@@ -9,6 +9,12 @@ MAXBOT_API_URL = f"{EDNA_API_BASE}/v1/out-messages/max-bot"
 # ("default.subject.not_found"), so the two must never be mixed up.
 MAX_API_URL = f"{EDNA_API_BASE}/v1/out-messages/max"
 VALID_MEDIA_TYPES = {"IMAGE", "VIDEO", "AUDIO", "DOCUMENT"}
+# The MAX channel accepts only these four content types (confirmed against a live
+# channel 2026-08-05: VOICE came back 400 "default.request.input_invalid").
+# Anything sound-like is therefore delivered as a plain DOCUMENT — the customer can
+# still play or save it, which beats not delivering the message at all.
+MAX_MEDIA_TYPES = {"IMAGE", "VIDEO", "DOCUMENT"}
+MAX_MEDIA_TYPE_FALLBACK = {"AUDIO": "DOCUMENT", "VOICE": "DOCUMENT"}
 VALID_ID_TYPES = {"MAX_ID", "PHONE"}
 logger = logging.getLogger(__name__)
 
@@ -115,17 +121,22 @@ async def send_media_max(
 ) -> dict:
     """Media message to a MAX channel.
 
-    The MAX docs list IMAGE / VIDEO / DOCUMENT; AUDIO is sent as-is and, if edna
-    rejects it, the operator gets the "undelivered" notice — see the open question
-    in review.md (#16). The caption field is assumed to match MAX Bot (`caption`)
-    and still needs confirming on a live channel."""
+    Two things differ from MAX Bot (both confirmed on a live channel 2026-08-05):
+    the caption field is `text`, not `caption` (edna silently drops `caption`, so
+    the operator's text vanished), and there is no `name` field at all. Sound is
+    downgraded to DOCUMENT — see MAX_MEDIA_TYPE_FALLBACK."""
     if content_type not in VALID_MEDIA_TYPES:
         raise ValueError(f"Invalid content_type '{content_type}'. Must be one of {VALID_MEDIA_TYPES}")
     if not url or not name:
         raise ValueError("url and name must be non-empty strings")
-    content = {"type": content_type, "url": url}
+    max_type = MAX_MEDIA_TYPE_FALLBACK.get(content_type, content_type)
+    if max_type not in MAX_MEDIA_TYPES:
+        raise ValueError(f"Invalid content_type '{content_type}' for a MAX channel. Must be one of {MAX_MEDIA_TYPES}")
+    if max_type != content_type:
+        logger.info("MAX channel does not accept %s — sending as %s", content_type, max_type)
+    content = {"type": max_type, "url": url}
     if caption is not None:
-        content["caption"] = caption
+        content["text"] = caption
     return await _post_max(api_key, sender, to_value, to_type, content)
 
 
