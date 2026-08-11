@@ -180,7 +180,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
       <div class="card-header bg-white fw-semibold">Открытая линия Битрикс24</div>
       <div class="card-body">
         <p class="text-muted small mb-3">Сообщения от клиентов будут поступать в эту открытую линию.</p>
-        <div id="openLineStatus"></div>
+        <div id="openLineStatus" class="d-flex flex-wrap align-items-center gap-2"></div>
         <div id="openLineForm" class="d-none mt-2">
           <select class="form-select mb-2" id="lineSelect"></select>
           <div id="openLineError" class="alert alert-danger d-none mb-2"></div>
@@ -360,18 +360,18 @@ function renderOpenLine(data) {
   var lines = data.lines || [];
   if (name) {
     status.innerHTML =
-      '<span class="badge badge-active rounded-pill me-2">Подключена</span>' + esc(name) +
-      ' <button class="btn btn-primary btn-sm ms-2" onclick="editOpenLine()">Изменить</button>';
+      '<span class="badge badge-active rounded-pill">Подключена</span><span>' + esc(name) + '</span>' +
+      '<button class="btn btn-primary btn-sm" onclick="editOpenLine()">Изменить</button>';
   } else if (lines.length) {
     status.innerHTML =
-      '<span class="badge badge-warning rounded-pill me-2">Не выбрана</span>' +
-      'Выберите открытую линию — без неё сообщения от клиентов не попадут в Битрикс24.' +
-      ' <button class="btn btn-primary btn-sm ms-2" onclick="editOpenLine()">Выбрать линию</button>';
+      '<span class="badge badge-warning rounded-pill">Не выбрана</span>' +
+      '<span>Выберите открытую линию — без неё сообщения от клиентов не попадут в Битрикс24.</span>' +
+      '<button class="btn btn-primary btn-sm" onclick="editOpenLine()">Выбрать линию</button>';
   } else {
     status.innerHTML =
-      '<span class="badge badge-warning rounded-pill me-2">Не создана</span>' +
-      'В вашем Битрикс24 нет открытых линий. Нажмите кнопку, чтобы создать линию «edna MAX» автоматически.' +
-      ' <button class="btn btn-primary btn-sm ms-2" id="createLineBtn" onclick="createOpenLine()">Создать линию</button>';
+      '<span class="badge badge-warning rounded-pill">Не создана</span>' +
+      '<span>В вашем Битрикс24 нет открытых линий. Нажмите кнопку, чтобы создать линию «edna MAX» автоматически.</span>' +
+      '<button class="btn btn-primary btn-sm" id="createLineBtn" onclick="createOpenLine()">Создать линию</button>';
   }
 }
 
