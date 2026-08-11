@@ -75,8 +75,10 @@ async def send_media(api_key: str, sender: str, max_id: str, content_type: str, 
     if not url or not name:
         raise ValueError("url and name must be non-empty strings")
     content = {"type": content_type, "url": url}
+    # Подпись — поле `text`, не `caption`: манифест edna обещает `caption`, но edna
+    # молча его выбрасывает (проверено пробами в Postman 2026-08-11). Как в MAX.
     if caption is not None:
-        content["caption"] = caption
+        content["text"] = caption
     return await _post(api_key, sender, max_id, content)
 
 
