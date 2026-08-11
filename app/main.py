@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
-from app.routers import api, files, handler, incoming, install, settings_page
+from app.routers import api, files, handler, incoming, install, settings_page, status
 from app.config import settings
 
 logging.basicConfig(
@@ -194,6 +194,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(install.router)
 app.include_router(handler.router)
 app.include_router(incoming.router)
+app.include_router(status.router)
 app.include_router(api.router)
 app.include_router(files.router)
 app.include_router(settings_page.router)

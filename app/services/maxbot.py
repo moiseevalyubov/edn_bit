@@ -62,6 +62,9 @@ async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
     if not response.is_success:
         logger.error("edna error %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
+    # Ответ несёт outMessageId — по нему edna потом присылает статусы доставки.
+    # Пишем его в лог: сверить с messageId статусного вебхука можно только так.
+    logger.info("edna response: %s", response.text[:500])
     return response.json()
 
 
@@ -104,6 +107,7 @@ async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, cont
     if not response.is_success:
         logger.error("edna MAX error %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
+    logger.info("edna MAX response: %s", response.text[:500])
     return response.json()
 
 
