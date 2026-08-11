@@ -131,7 +131,7 @@ with engine.connect() as _conn:
 # #2: store client identity on incoming messages so the "undelivered" notice
 # can be posted into the SAME Open Line dialog (matching original user.id/name)
 with engine.connect() as _conn:
-    for _col, _coltype in (("subscriber_user_id", "TEXT"), ("user_name", "TEXT")):
+    for _col, _coltype in (("subscriber_user_id", "TEXT"), ("user_name", "TEXT"), ("user_last_name", "TEXT")):
         try:
             _conn.execute(text(f"ALTER TABLE messages ADD COLUMN {_col} {_coltype}"))
             _conn.commit()

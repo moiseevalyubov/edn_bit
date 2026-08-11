@@ -102,6 +102,7 @@ class Message(Base):
     # messages — reused to post the "undelivered" notice into the SAME dialog.
     subscriber_user_id = Column(String, nullable=True)
     user_name = Column(String, nullable=True)
+    user_last_name = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
     raw_payload = Column(Text, nullable=True)
 

@@ -95,6 +95,22 @@ async def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
     )
 
 
+def _user_block(user_id: str, user_name: str, user_last_name: str | None) -> dict:
+    """Client identity for Bitrix. Фамилия идёт отдельным полем `last_name`, чтобы
+    контакт в CRM создавался с именем и фамилией, а не одной строкой."""
+    block = {"id": user_id, "name": user_name, "skip_phone_validate": "Y"}
+    if user_last_name:
+        block["last_name"] = user_last_name
+    return block
+
+
+def _chat_block(chat_id: str, user_name: str, user_last_name: str | None) -> dict:
+    """Название диалога. Без него Битрикс подставляет идентификатор клиента, и в
+    списке чатов оператор видит цифры вместо имени."""
+    name = f"{user_name} {user_last_name}".strip() if user_last_name else user_name
+    return {"id": chat_id, "name": name} if name else {"id": chat_id}
+
+
 async def send_message_to_bitrix(
     portal: Portal,
     db: Session,
@@ -103,6 +119,7 @@ async def send_message_to_bitrix(
     user_name: str,
     text: str,
     msg_id: str,
+    user_last_name: str | None = None,
 ) -> dict:
     line_id = portal.open_line_id or "0"
     result = await call_bitrix(
@@ -114,17 +131,13 @@ async def send_message_to_bitrix(
             "LINE": int(line_id),
             "MESSAGES": [
                 {
-                    "user": {
-                        "id": user_id,
-                        "name": user_name,
-                        "skip_phone_validate": "Y",
-                    },
+                    "user": _user_block(user_id, user_name, user_last_name),
                     "message": {
                         "id": msg_id,
                         "date": int(time.time()),
                         "text": text,
                     },
-                    "chat": {"id": chat_id},
+                    "chat": _chat_block(chat_id, user_name, user_last_name),
                 }
             ],
         },
@@ -142,6 +155,7 @@ async def send_file_to_bitrix(
     file_url: str,
     file_name: str,
     caption: str | None = None,
+    user_last_name: str | None = None,
 ) -> dict:
     line_id = portal.open_line_id or "0"
     message: dict = {
@@ -160,13 +174,9 @@ async def send_file_to_bitrix(
             "LINE": int(line_id),
             "MESSAGES": [
                 {
-                    "user": {
-                        "id": user_id,
-                        "name": user_name,
-                        "skip_phone_validate": "Y",
-                    },
+                    "user": _user_block(user_id, user_name, user_last_name),
                     "message": message,
-                    "chat": {"id": chat_id},
+                    "chat": _chat_block(chat_id, user_name, user_last_name),
                 }
             ],
         },
@@ -182,6 +192,7 @@ async def send_undelivered_notice(
     user_id: str,
     notice_text: str,
     user_name: str | None = None,
+    user_last_name: str | None = None,
 ) -> None:
     """Show the operator that an outgoing message could NOT be delivered to MAX.
 
@@ -197,6 +208,8 @@ async def send_undelivered_notice(
     user_block: dict = {"id": user_id, "skip_phone_validate": "Y"}
     if user_name:
         user_block["name"] = user_name
+    if user_last_name:
+        user_block["last_name"] = user_last_name
     await call_bitrix(
         portal,
         db,

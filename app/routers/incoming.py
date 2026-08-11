@@ -52,7 +52,7 @@ def _identifier_type(subscriber: dict, subscriber_identifier: str) -> str:
     return "MAX_ID"
 
 
-def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) -> str | None:
+def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) -> tuple[str | None, str | None]:
     """#16: last known real name of this client across all channels of the portal.
 
     MAX channels always send `userInfo: null`, so the name can only be learned
@@ -60,9 +60,9 @@ def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) 
     placeholders we stored ourselves — skip them, or we'd "find" the same digits.
     """
     if not subscriber_identifier:
-        return None
+        return None, None
     row = (
-        db.query(Message.user_name)
+        db.query(Message.user_name, Message.user_last_name)
         .join(Channel, Message.channel_id == Channel.id)
         .filter(
             Channel.portal_id == channel.portal_id,
@@ -74,7 +74,7 @@ def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) 
         .order_by(Message.sent_at.desc())
         .first()
     )
-    return row[0] if row else None
+    return (row[0], row[1]) if row else (None, None)
 
 
 def _remember_identity(
@@ -86,6 +86,7 @@ def _remember_identity(
     subscriber_id_type: str,
     user_name: str,
     data: dict,
+    user_last_name: str | None = None,
 ) -> None:
     """#16: persist the client identity from a service message we don't forward.
 
@@ -109,6 +110,7 @@ def _remember_identity(
             subscriber_id_type=subscriber_id_type,
             subscriber_user_id=subscriber_id or subscriber_identifier,
             user_name=user_name,
+            user_last_name=user_last_name,
             raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
         ))
         db.commit()
@@ -179,10 +181,12 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     # #16: MAX channels send userInfo=null — reuse the name we already know for
     # this client from any channel of the portal before falling back to digits.
     raw_name = user_info.get("userName") or user_info.get("firstName")
+    raw_last_name = user_info.get("lastName")
     if not raw_name:
-        raw_name = _known_user_name(db, channel, subscriber_identifier)
+        raw_name, raw_last_name = _known_user_name(db, channel, subscriber_identifier)
     # SEC-10: strip HTML/JS, SEC-7: cap to 255 chars
     user_name = sanitize_name(raw_name or subscriber_identifier)
+    user_last_name = sanitize_name(raw_last_name) if raw_last_name else None
 
     msg_id = str(data.get("id", ""))
     chat_id = _bitrix_chat_id(channel, subscriber_identifier)
@@ -196,7 +200,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     if msg_type == "CONVERSATION_STARTED":
         _remember_identity(
             db, channel, msg_id, subscriber_id, subscriber_identifier,
-            subscriber_id_type, user_name, data,
+            subscriber_id_type, user_name, data, user_last_name,
         )
         return JSONResponse({"status": "ok"})
 
@@ -239,6 +243,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
+                user_last_name=user_last_name,
                 msg_id=msg_id,
                 content_type=msg_type,
                 subscriber_identifier=subscriber_identifier,
@@ -279,6 +284,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
+                user_last_name=user_last_name,
                 msg_id=msg_id,
                 content_type="LOCATION",
                 subscriber_identifier=subscriber_identifier,
@@ -308,6 +314,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 chat_id=chat_id,
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
+                user_last_name=user_last_name,
                 msg_id=msg_id,
                 content_type="TEXT",
                 subscriber_identifier=subscriber_identifier,

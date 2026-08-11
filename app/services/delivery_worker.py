@@ -90,6 +90,7 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
                 chat_id=payload["chat_id"],
                 user_id=payload["user_id"],
                 user_name=payload["user_name"],
+                user_last_name=payload.get("user_last_name"),
                 msg_id=payload["msg_id"],
                 file_url=payload["file_url"],
                 file_name=payload["file_name"],
@@ -102,6 +103,7 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
                 chat_id=payload["chat_id"],
                 user_id=payload["user_id"],
                 user_name=payload["user_name"],
+                user_last_name=payload.get("user_last_name"),
                 text=payload["text"],
                 msg_id=payload["msg_id"],
             )
@@ -118,6 +120,7 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
             # #2: persist exact client identity sent to Bitrix (user.id / name)
             subscriber_user_id=payload.get("user_id"),
             user_name=payload.get("user_name"),
+            user_last_name=payload.get("user_last_name"),
             sent_at=datetime.utcnow(),
             raw_payload=payload.get("raw_payload"),
         ))
@@ -311,6 +314,7 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
             user_id=str(orig.subscriber_user_id),
             notice_text=notice,
             user_name=orig.user_name,
+            user_last_name=orig.user_last_name,
         )
         logger.info(
             "Undelivered notice sent to operator (channel=%s, chat=%s)", channel_id, bitrix_chat_id
@@ -444,6 +448,7 @@ def enqueue_incoming(
     file_url: str | None = None,
     file_name: str | None = None,
     caption: str | None = None,
+    user_last_name: str | None = None,
 ) -> MessageDeliveryTask:
     """Enqueue an incoming MAX Bot message for delivery to Bitrix24."""
     payload = {
@@ -451,6 +456,7 @@ def enqueue_incoming(
         "chat_id": chat_id,
         "user_id": user_id,
         "user_name": user_name,
+        "user_last_name": user_last_name,
         "msg_id": msg_id,
         "content_type": content_type,
         "subscriber_identifier": subscriber_identifier,
