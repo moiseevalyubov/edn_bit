@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 
 RETRY_SCHEDULE = [1, 5, 30, 120, 600, 1800]  # seconds between retry attempts
 
+# Тип канала хранится техническим кодом (MAX_BOT), а оператор видит его в тексте
+# уведомления о недоставке — показываем человеческое название.
+_CHANNEL_LABELS = {"MAX_BOT": "MAX Bot", "MAX": "MAX"}
+
 TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 
@@ -300,7 +304,7 @@ async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: st
 
         # Use the channel's edna type (e.g. MAX, WHATSAPP) captured at registration;
         # fall back to "MAX" for older/manual channels with no stored type.
-        ch_type = channel.channel_type or "MAX"
+        ch_type = _CHANNEL_LABELS.get(channel.channel_type or "MAX", channel.channel_type or "MAX")
         if payload.get("msg_type") == "media":
             notice = f"⚠️ Файл не доставлен клиенту в {ch_type}. Попробуйте отправить ещё раз."
         else:
