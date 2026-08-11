@@ -95,6 +95,7 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
                 user_id=payload["user_id"],
                 user_name=payload["user_name"],
                 user_last_name=payload.get("user_last_name"),
+                user_phone=payload.get("user_phone"),
                 msg_id=payload["msg_id"],
                 file_url=payload["file_url"],
                 file_name=payload["file_name"],
@@ -108,6 +109,7 @@ async def _execute_incoming(channel_id: int, payload: dict) -> None:
                 user_id=payload["user_id"],
                 user_name=payload["user_name"],
                 user_last_name=payload.get("user_last_name"),
+                user_phone=payload.get("user_phone"),
                 text=payload["text"],
                 msg_id=payload["msg_id"],
             )
@@ -453,6 +455,7 @@ def enqueue_incoming(
     file_name: str | None = None,
     caption: str | None = None,
     user_last_name: str | None = None,
+    user_phone: str | None = None,
 ) -> MessageDeliveryTask:
     """Enqueue an incoming MAX Bot message for delivery to Bitrix24."""
     payload = {
@@ -461,6 +464,7 @@ def enqueue_incoming(
         "user_id": user_id,
         "user_name": user_name,
         "user_last_name": user_last_name,
+        "user_phone": user_phone,
         "msg_id": msg_id,
         "content_type": content_type,
         "subscriber_identifier": subscriber_identifier,

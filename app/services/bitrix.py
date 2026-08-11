@@ -95,12 +95,16 @@ async def activate_connector(portal: Portal, db: Session, line_id: str) -> None:
     )
 
 
-def _user_block(user_id: str, user_name: str, user_last_name: str | None) -> dict:
+def _user_block(user_id: str, user_name: str, user_last_name: str | None, user_phone: str | None = None) -> dict:
     """Client identity for Bitrix. Фамилия идёт отдельным полем `last_name`, чтобы
     контакт в CRM создавался с именем и фамилией, а не одной строкой."""
     block = {"id": user_id, "name": user_name, "skip_phone_validate": "Y"}
     if user_last_name:
         block["last_name"] = user_last_name
+    # Телефон edna присылает не всегда. Проверяем, подхватит ли Битрикс существующий
+    # контакт по номеру (задача #12) или заведёт нового «Гостя».
+    if user_phone:
+        block["phone"] = user_phone
     return block
 
 
@@ -120,6 +124,7 @@ async def send_message_to_bitrix(
     text: str,
     msg_id: str,
     user_last_name: str | None = None,
+    user_phone: str | None = None,
 ) -> dict:
     line_id = portal.open_line_id or "0"
     result = await call_bitrix(
@@ -131,7 +136,7 @@ async def send_message_to_bitrix(
             "LINE": int(line_id),
             "MESSAGES": [
                 {
-                    "user": _user_block(user_id, user_name, user_last_name),
+                    "user": _user_block(user_id, user_name, user_last_name, user_phone),
                     "message": {
                         "id": msg_id,
                         "date": int(time.time()),
@@ -156,6 +161,7 @@ async def send_file_to_bitrix(
     file_name: str,
     caption: str | None = None,
     user_last_name: str | None = None,
+    user_phone: str | None = None,
 ) -> dict:
     line_id = portal.open_line_id or "0"
     message: dict = {
@@ -174,7 +180,7 @@ async def send_file_to_bitrix(
             "LINE": int(line_id),
             "MESSAGES": [
                 {
-                    "user": _user_block(user_id, user_name, user_last_name),
+                    "user": _user_block(user_id, user_name, user_last_name, user_phone),
                     "message": message,
                     "chat": _chat_block(chat_id, user_name, user_last_name),
                 }

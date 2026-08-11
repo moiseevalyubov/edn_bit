@@ -52,6 +52,22 @@ def _identifier_type(subscriber: dict, subscriber_identifier: str) -> str:
     return "MAX_ID"
 
 
+def _subscriber_phone(subscriber: dict) -> str | None:
+    """Номер клиента из массива `identifiers`, если edna его прислала.
+
+    Приходит не всегда — только когда профиль в edna связан с телефоном. Порядок
+    в массиве не фиксирован: PHONE встречается и первым, и вторым."""
+    identifiers = subscriber.get("identifiers")
+    if not isinstance(identifiers, list):
+        return None
+    for item in identifiers:
+        if isinstance(item, dict) and str(item.get("type") or "").upper() == "PHONE":
+            value = str(item.get("value") or "").strip()
+            if value:
+                return value
+    return None
+
+
 def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) -> tuple[str | None, str | None]:
     """#16: last known real name of this client across all channels of the portal.
 
@@ -187,6 +203,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     # SEC-10: strip HTML/JS, SEC-7: cap to 255 chars
     user_name = sanitize_name(raw_name or subscriber_identifier)
     user_last_name = sanitize_name(raw_last_name) if raw_last_name else None
+    user_phone = _subscriber_phone(subscriber)
 
     msg_id = str(data.get("id", ""))
     chat_id = _bitrix_chat_id(channel, subscriber_identifier)
@@ -244,6 +261,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
                 user_last_name=user_last_name,
+                user_phone=user_phone,
                 msg_id=msg_id,
                 content_type=msg_type,
                 subscriber_identifier=subscriber_identifier,
@@ -285,6 +303,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
                 user_last_name=user_last_name,
+                user_phone=user_phone,
                 msg_id=msg_id,
                 content_type="LOCATION",
                 subscriber_identifier=subscriber_identifier,
@@ -315,6 +334,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
                 user_id=subscriber_id or subscriber_identifier,
                 user_name=user_name,
                 user_last_name=user_last_name,
+                user_phone=user_phone,
                 msg_id=msg_id,
                 content_type="TEXT",
                 subscriber_identifier=subscriber_identifier,
