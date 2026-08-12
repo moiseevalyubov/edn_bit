@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 RETRY_SCHEDULE = [1, 5, 30, 120, 600, 1800]  # seconds between retry attempts
 
+# Через сколько задача в статусе processing считается брошенной (упал прошлый запуск).
+STALE_TASK_SECONDS = 300
+
 # Тип канала хранится техническим кодом (MAX_BOT), а оператор видит его в тексте
 # уведомления о недоставке — показываем человеческое название.
 _CHANNEL_LABELS = {"MAX_BOT": "MAX Bot", "MAX": "MAX"}
@@ -353,9 +356,21 @@ async def _process_one_task() -> bool:
         retry_count = task.retry_count
         channel_id = task.channel_id
 
-        task.status = "processing"
-        task.updated_at = datetime.utcnow()
+        # Забираем задачу одним атомарным UPDATE с условием "она всё ещё pending".
+        # Найти и пометить двумя отдельными действиями нельзя: если приложение
+        # работает в нескольких экземплярах, оба увидят одну задачу и оба её
+        # отправят — клиент получит сообщение дважды.
+        claimed = (
+            db.query(MessageDeliveryTask)
+            .filter(MessageDeliveryTask.id == task_id, MessageDeliveryTask.status == "pending")
+            .update({"status": "processing", "updated_at": datetime.utcnow()},
+                    synchronize_session=False)
+        )
         db.commit()
+        if not claimed:
+            # Задачу перехватил другой экземпляр — не спим, берём следующую.
+            logger.info("Task %d already claimed by another worker, skipping", task_id)
+            return True
     finally:
         db.close()
 
@@ -402,10 +417,20 @@ async def _process_one_task() -> bool:
 
 
 async def _reset_stale_tasks() -> None:
-    """Reset tasks stuck in 'processing' from a previous app crash."""
+    """Reset tasks stuck in 'processing' from a previous app crash.
+
+    Только те, что висят давно: при старте рядом может работать другой экземпляр
+    приложения, и сбрасывать его задачу «на лету» нельзя — она уйдёт клиенту
+    второй раз. Живая отправка укладывается в секунды, так что порог с запасом."""
     db = SessionLocal()
     try:
-        stale = db.query(MessageDeliveryTask).filter_by(status="processing").all()
+        cutoff = datetime.utcnow() - timedelta(seconds=STALE_TASK_SECONDS)
+        stale = (
+            db.query(MessageDeliveryTask)
+            .filter(MessageDeliveryTask.status == "processing")
+            .filter(MessageDeliveryTask.updated_at < cutoff)
+            .all()
+        )
         for t in stale:
             t.status = "pending"
             t.updated_at = datetime.utcnow()
@@ -420,12 +445,18 @@ async def _worker_loop() -> None:
     """Background delivery worker with exponential backoff retry."""
     await _reset_stale_tasks()
     logger.info("Delivery worker started")
+    last_stale_check = datetime.utcnow()
 
     while True:
         try:
             processed = await _process_one_task()
             if not processed:
                 await asyncio.sleep(2)
+            # Брошенные задачи ищем и по ходу работы, а не только при старте:
+            # у сброса теперь порог в 5 минут, а упасть можно в любой момент.
+            if (datetime.utcnow() - last_stale_check).total_seconds() >= STALE_TASK_SECONDS:
+                await _reset_stale_tasks()
+                last_stale_check = datetime.utcnow()
         except Exception:
             # RISK-2 mitigation: outer loop must NEVER die — log and continue
             logger.exception("Worker loop error")
