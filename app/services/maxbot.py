@@ -49,22 +49,6 @@ class WebhookSetupError(Exception):
         self.channel_type = channel_type
 
 
-def _log_exchange(response: httpx.Response) -> None:
-    """ВРЕМЕННАЯ ДИАГНОСТИКА (2026-08-12, дубли исходящих в MAX).
-
-    Один наш запрос порождает у edna два сообщения, а точно такой же запрос из
-    Postman — одно. Тело у них совпадает посимвольно, значит различие где-то
-    вокруг: в заголовках, в соединении или в маршруте. Печатаем и то, что
-    отправили мы, и то, что ответила edna, — есть с чем сравнить.
-
-    Убрать, когда причина найдётся."""
-    sent = {
-        k: ("***" if k.lower() == "x-api-key" else v)
-        for k, v in response.request.headers.items()
-    }
-    logger.info("edna exchange: наши заголовки %s | ответ edna %s", sent, dict(response.headers))
-
-
 async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
     payload = {"sender": sender, "maxId": max_id, "content": content}
     logger.info("edna request payload: %s", payload)
@@ -81,7 +65,6 @@ async def _post(api_key: str, sender: str, max_id: str, content: dict) -> dict:
     # Ответ несёт outMessageId — по нему edna потом присылает статусы доставки.
     # Пишем его в лог: сверить с messageId статусного вебхука можно только так.
     logger.info("edna response: %s", response.text[:500])
-    _log_exchange(response)
     return response.json()
 
 
@@ -125,7 +108,6 @@ async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, cont
         logger.error("edna MAX error %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
     logger.info("edna MAX response: %s", response.text[:500])
-    _log_exchange(response)
     return response.json()
 
 
