@@ -178,9 +178,14 @@ async def get_channel_profiles(api_key: str) -> list:
     return response.json()
 
 
-async def set_in_message_callback(api_key: str, subject_id: int, callback_url: str) -> dict:
-    """POST /api/callback/set — прописать URL для входящих сообщений у канала."""
-    payload = {"subjectId": subject_id, "inMessageCallbackUrl": callback_url}
+async def _set_callback(api_key: str, subject_id: int, field: str, callback_url: str) -> dict:
+    """POST /api/callback/set — прописать канал одному из вебхуков edna.
+
+    Метод обновляет **только переданные поля** (проверено на живом канале
+    2026-08-12), поэтому входящие и статусы прописываются двумя отдельными
+    запросами: так edna ещё и подписывает вебхук именем в личном кабинете,
+    и клиенту видно, что именно у него настроено."""
+    payload = {"subjectId": subject_id, field: callback_url}
     logger.info("edna callback/set payload: %s", payload)
     async with httpx.AsyncClient() as client:
         response = await client.post(
@@ -195,11 +200,27 @@ async def set_in_message_callback(api_key: str, subject_id: int, callback_url: s
     return response.json()
 
 
-async def configure_incoming_webhook(api_key: str, sender: str, callback_url: str) -> dict:
+async def set_in_message_callback(api_key: str, subject_id: int, callback_url: str) -> dict:
+    """URL для вебхука о входящих сообщениях."""
+    return await _set_callback(api_key, subject_id, "inMessageCallbackUrl", callback_url)
+
+
+async def set_status_callback(api_key: str, subject_id: int, callback_url: str) -> dict:
+    """URL для вебхука о смене статуса доставки (SENT / DELIVERED / READ / FAILED …)."""
+    return await _set_callback(api_key, subject_id, "statusCallbackUrl", callback_url)
+
+
+async def configure_incoming_webhook(
+    api_key: str, sender: str, callback_url: str, status_callback_url: str | None = None
+) -> dict:
     """Найти в edna канал, у которого subject совпадает с sender, и прописать ему
     callback_url как webhook для входящих сообщений.
 
-    Возвращает {"subject_id": int, "type": str|None} при успехе.
+    Если передан status_callback_url — прописать заодно и вебхук статусов доставки.
+    Это делается последним и «по возможности»: без статусов канал полностью
+    работоспособен, а без входящих — нет.
+
+    Возвращает {"subject_id": int, "type": str|None, "status_configured": bool} при успехе.
     Бросает WebhookSetupError при ошибке (см. флаг fatal в самом исключении):
     - fatal=True  — канал заведомо нерабочий или непроверяемый (неверный Sender ID,
       ключ невалиден 401, нет доступа к подписи 403, канал не активирован, edna не
@@ -289,4 +310,22 @@ async def configure_incoming_webhook(api_key: str, sender: str, callback_url: st
             subject_id=subject_id, channel_type=channel_type,
         )
 
-    return {"subject_id": subject_id, "type": channel_type}
+    # --- 3) Вебхук статусов доставки (по возможности, отдельным запросом) ---
+    status_configured = False
+    if status_callback_url:
+        try:
+            status_result = await set_status_callback(api_key, subject_id, status_callback_url)
+            status_code = status_result.get("code") if isinstance(status_result, dict) else None
+            status_configured = status_code == "ok"
+            if not status_configured:
+                logger.warning(
+                    "edna не приняла statusCallbackUrl (код %s) — метки о прочтении работать не будут",
+                    status_code,
+                )
+        except Exception as e:
+            # Канал уже подключён и работает — молчим для пользователя, пишем в лог.
+            logger.warning(
+                "Не удалось прописать statusCallbackUrl: %s: %s", type(e).__name__, e
+            )
+
+    return {"subject_id": subject_id, "type": channel_type, "status_configured": status_configured}

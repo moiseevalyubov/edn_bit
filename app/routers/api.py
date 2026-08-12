@@ -70,6 +70,8 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     # abort cleanly if the channel turns out to be unusable.
     webhook_token = uuid.uuid4().hex
     webhook_url = f"{settings.app_base_url}/incoming/{webhook_token}"
+    # Статусы доставки узнаёт тот же канал — токен один, отличается только путь.
+    status_url = f"{settings.app_base_url}/status/{webhook_token}"
 
     # UX: auto-register the webhook in edna so the user doesn't copy-paste the URL.
     # - fatal failure (wrong Sender ID, invalid key 401, no access to subject 403,
@@ -82,7 +84,9 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
     subject_id = None
     channel_type = None
     try:
-        info = await configure_incoming_webhook(body.api_key, body.sender, webhook_url)
+        info = await configure_incoming_webhook(
+            body.api_key, body.sender, webhook_url, status_url
+        )
         subject_id = info["subject_id"]
         channel_type = info.get("type")
         auto_configured = True
