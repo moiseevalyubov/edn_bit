@@ -21,6 +21,12 @@
 - `a` — как в бою: новый клиент на каждый запрос, минимум заголовков.
 - `b` — тот же клиент, но заголовки как у Postman.
 - `c` — общий клиент с постоянным соединением (keep-alive), не закрываем.
+- `q` — **через очередь и фоновый воркер**, то есть боевым путём, но без Битрикса.
+
+**Итог прогона 2026-08-12:** вариант `a` дублей не дал (5 из 5 чисто). Значит ни
+маршрут, ни заголовки, ни соединение ни при чём — остаётся очередь. Её разбирает
+воркер, а он живёт в каждом экземпляре приложения; второй экземпляр нам не виден,
+логи показывают только один. Отсюда `q` и `/debug/who`.
 
 Удалить вместе с `_log_exchange`, когда причина найдётся.
 """
@@ -36,7 +42,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Channel, is_max_bot_channel
+from app.models import Channel, bitrix_chat_id_for, is_max_bot_channel
+from app.services.delivery_worker import enqueue_outgoing
 from app.services.maxbot import MAXBOT_API_URL, MAX_API_URL
 
 logger = logging.getLogger(__name__)
@@ -52,6 +59,11 @@ _POSTMAN_HEADERS = {
     "Connection": "keep-alive",
 }
 
+# Метка этого процесса. Если приложение работает в нескольких экземплярах,
+# запросы будут попадать то в один, то в другой — и метки в ответе разойдутся.
+# Это единственный способ увидеть соседа: его собственных логов нам не показывают.
+INSTANCE_ID = uuid.uuid4().hex[:8]
+
 _shared_client: httpx.AsyncClient | None = None
 
 
@@ -61,6 +73,13 @@ def _get_shared_client() -> httpx.AsyncClient:
     if _shared_client is None:
         _shared_client = httpx.AsyncClient(timeout=10)
     return _shared_client
+
+
+@router.get("/debug/who")
+async def debug_who():
+    """Кто ответил на этот запрос. Дёрнуть десяток раз подряд: если метка меняется,
+    экземпляров приложения больше одного — а значит и фоновых воркеров тоже."""
+    return JSONResponse({"instance": INSTANCE_ID})
 
 
 @router.post("/debug/edna/{webhook_token}")
@@ -79,6 +98,22 @@ async def debug_send(webhook_token: str, request: Request, db: Session = Depends
     variant = str(data.get("variant") or "a").lower()
     if not to:
         return JSONResponse({"error": "no_to"}, status_code=400)
+
+    if variant == "q":
+        # Отправка через очередь и фоновый воркер — то есть ровно боевым путём,
+        # но без Битрикса. Если дубли появятся только здесь, виноват не запрос к
+        # edna, а сама очередь: её разбирает воркер в каждом экземпляре приложения.
+        enqueue_outgoing(
+            db=db,
+            channel=channel,
+            msg_type="text",
+            max_id=to,
+            bitrix_chat_id=bitrix_chat_id_for(channel, to),
+            raw_payload="debug",
+            text=text,
+        )
+        logger.info("DEBUG вариант q (через очередь), экземпляр %s: %s", INSTANCE_ID, text)
+        return JSONResponse({"variant": "q", "instance": INSTANCE_ID, "queued": True})
 
     if is_max_bot_channel(channel):
         url = MAXBOT_API_URL
@@ -109,6 +144,7 @@ async def debug_send(webhook_token: str, request: Request, db: Session = Depends
     )
     return JSONResponse({
         "variant": variant,
+        "instance": INSTANCE_ID,
         "status_code": response.status_code,
         "elapsed_ms": elapsed_ms,
         "edna": response.text[:300],
