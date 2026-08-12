@@ -48,24 +48,64 @@ async def register_connector(portal: Portal, db: Session) -> None:
     )
 
 
+BOUND_EVENTS = [
+    "OnImConnectorMessageAdd",
+    "OnImConnectorDialogStart",
+    "OnImConnectorDialogFinish",
+    "OnAppUninstall",
+]
+
+
+async def _unbind_stale_handlers(portal: Portal, db: Session, handler_url: str) -> None:
+    """Снять привязки наших событий, ведущие на посторонний адрес.
+
+    `event.bind` только добавляет обработчик — старый остаётся. Поэтому при смене
+    адреса приложения (переезд на другой хостинг, смена домена) в Битриксе копятся
+    привязки, и одно событие уходит на все адреса сразу. Каждый получатель
+    добросовестно отправляет сообщение клиенту — клиент получает несколько копий.
+
+    Так и случилось 2026-08-12: после переезда с Render на Amvera остались обе
+    привязки, ответ оператора приходил в оба приложения, и клиент видел дубль.
+    Диагностика заняла полдня, потому что в логах нового стенда всё было чисто:
+    второе сообщение отправлял другой сервер, со своей базой.
+
+    Делается после привязки нового адреса — чтобы портал ни на миг не остался
+    вовсе без обработчика."""
+    try:
+        result = await call_bitrix(portal, db, "event.get", {})
+    except Exception as e:
+        logger.warning("Не удалось получить список привязок событий: %s", e)
+        return
+    bindings = result.get("result") or []
+    ours = {e.upper() for e in BOUND_EVENTS}
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        event = str(binding.get("event") or "")
+        handler = str(binding.get("handler") or "")
+        if event.upper() not in ours or not handler or handler == handler_url:
+            continue
+        try:
+            await call_bitrix(portal, db, "event.unbind", {"event": event, "handler": handler})
+            logger.warning("Снята устаревшая привязка события %s → %s", event, handler)
+        except Exception as e:
+            logger.warning("Не удалось снять привязку %s → %s: %s", event, handler, e)
+
+
 async def bind_events(portal: Portal, db: Session) -> None:
     if not settings.app_base_url:
         logger.error("APP_BASE_URL is not set — cannot bind events")
         return
     handler_url = f"{settings.app_base_url}/handler"
     logger.info("Binding events with handler_url=%s", handler_url)
-    for event in [
-        "OnImConnectorMessageAdd",
-        "OnImConnectorDialogStart",
-        "OnImConnectorDialogFinish",
-        "OnAppUninstall",
-    ]:
+    for event in BOUND_EVENTS:
         try:
             await call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})
             logger.info("Bound event %s → %s", event, handler_url)
         except Exception:
             logger.exception("Failed to bind event %s — portal may be in partial state", event)
             raise
+    await _unbind_stale_handlers(portal, db, handler_url)
 
 
 async def get_open_lines(portal: Portal, db: Session) -> list:
