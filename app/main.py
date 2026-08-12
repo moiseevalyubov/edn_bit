@@ -150,6 +150,29 @@ with engine.connect() as _conn:
     except Exception:
         _conn.rollback()
 
+# Статусы доставки: связка «наша отправка ↔ сообщение открытой линии». edna
+# присылает статус с requestId, равным outMessageId из ответа на отправку;
+# по нему находим, куда ставить метку. Колонки nullable — сообщения, отправленные
+# до этой правки, статусов просто не получат, бэкофилл не нужен.
+with engine.connect() as _conn:
+    for _col in ("edna_request_id", "im_message_id", "line_id"):
+        try:
+            _conn.execute(text(f"ALTER TABLE messages ADD COLUMN {_col} TEXT"))
+            _conn.commit()
+            logger.info("Migration: added messages.%s column", _col)
+        except Exception:
+            _conn.rollback()
+    try:
+        _conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS idx_messages_edna_request_id "
+            "ON messages(edna_request_id) WHERE edna_request_id IS NOT NULL"
+        ))
+        _conn.commit()
+        logger.info("Migration: added index on messages.edna_request_id")
+    except Exception as _e:
+        _conn.rollback()
+        logger.warning("Migration edna_request_id index skipped: %s", _e)
+
 # #16: channels created before MAX support could only ever be MAX Bot ones, so label
 # them explicitly instead of leaving every router to assume it. One-time and idempotent.
 with engine.connect() as _conn:

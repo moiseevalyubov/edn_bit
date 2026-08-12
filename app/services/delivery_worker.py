@@ -10,7 +10,6 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Channel, Message, MessageDeliveryTask, Portal, is_max_bot_channel
 from app.services.bitrix import (
-    send_delivery_status,
     send_file_to_bitrix,
     send_message_to_bitrix,
     send_undelivered_notice,
@@ -186,7 +185,6 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
         channel = db.query(Channel).filter_by(id=channel_id).first()
         if not channel:
             raise RuntimeError("Channel %d not found" % channel_id)
-        portal: Portal = channel.portal
 
         # #16: what edna needs — the bare client identifier, never the marked one.
         max_id = payload["max_id"]
@@ -198,7 +196,7 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
         if payload["msg_type"] == "media":
             file_url = make_signed_url(payload["file_key"])
             if use_max_endpoint:
-                await send_media_max(
+                result = await send_media_max(
                     api_key=channel.api_key,
                     sender=channel.sender,
                     to_value=max_id,
@@ -209,7 +207,7 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
                     caption=payload.get("caption"),
                 )
             else:
-                await send_media(
+                result = await send_media(
                     api_key=channel.api_key,
                     sender=channel.sender,
                     max_id=max_id,
@@ -220,7 +218,7 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
                 )
         else:
             if use_max_endpoint:
-                await send_message_max(
+                result = await send_message_max(
                     api_key=channel.api_key,
                     sender=channel.sender,
                     to_value=max_id,
@@ -228,12 +226,20 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
                     text=payload["text"],
                 )
             else:
-                await send_message(
+                result = await send_message(
                     api_key=channel.api_key,
                     sender=channel.sender,
                     max_id=max_id,
                     text=payload["text"],
                 )
+
+        # Ключ, по которому edna потом пришлёт статус этого сообщения: в ответе он
+        # зовётся outMessageId, в статусном вебхуке — requestId. Значение одно.
+        edna_request_id = None
+        if isinstance(result, dict) and result.get("outMessageId"):
+            edna_request_id = str(result["outMessageId"])
+        else:
+            logger.warning("edna не вернула outMessageId — статус этого сообщения не отследим")
 
         db.add(Message(
             channel_id=channel_id,
@@ -242,33 +248,25 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
             content_type=payload.get("content_type", "TEXT"),
             bitrix_chat_id=str(payload["im_chat_id"]) if payload.get("im_chat_id") else None,
             subscriber_identifier=max_id,
+            edna_request_id=edna_request_id,
+            im_message_id=str(payload["im_message_id"]) if payload.get("im_message_id") else None,
+            line_id=str(payload["line_id"]) if payload.get("line_id") else None,
             sent_at=datetime.utcnow(),
             raw_payload=payload.get("raw_payload"),
         ))
         db.commit()
 
-        # ADR-8: send delivery status — best-effort, no retry on failure
-        im_chat_id = payload.get("im_chat_id")
-        im_message_id = payload.get("im_message_id")
-        line_id = payload.get("line_id")
-        if im_chat_id and im_message_id and line_id:
-            try:
-                await send_delivery_status(
-                    portal=portal,
-                    db=db,
-                    line_id=int(line_id),
-                    bitrix_chat_id=int(im_chat_id),
-                    bitrix_message_id=int(im_message_id),
-                    # #16: Bitrix knows this dialog by the marked id, not the bare one
-                    chat_id=str(payload.get("bitrix_chat_id") or max_id),
-                )
-            except Exception as e:
-                logger.warning("Delivery status error (best-effort): %s", e)
+        # Метку «Просмотрено» здесь больше не ставим. Раньше она уходила прямо
+        # отсюда — то есть по факту «edna приняла наш HTTP-запрос», ещё до того,
+        # как сообщение вообще покидало edna. Оператор видел «Просмотрено» у
+        # непрочитанного (а иногда и у недоставленного) сообщения.
+        # Теперь метку ставит обработчик статусов по реальному `READ` от edna,
+        # см. app/routers/status.py.
     finally:
         db.close()
 
 
-async def _notify_outgoing_undelivered(channel_id: int, payload: dict, error: str) -> None:
+async def notify_outgoing_undelivered(channel_id: int, payload: dict, error: str) -> None:
     """Best-effort: tell the Bitrix operator that an outgoing message wasn't delivered to MAX.
 
     Called only when an outgoing (Bitrix → edna) task fails terminally (dead / file expired).
@@ -390,7 +388,7 @@ async def _process_one_task() -> bool:
         _update_status(task_id, "failed", error=str(e))
         logger.error("Task %d failed permanently (file cache expired): %s", task_id, e)
         if task_type == "send_to_edna":
-            await _notify_outgoing_undelivered(channel_id, payload, str(e))
+            await notify_outgoing_undelivered(channel_id, payload, str(e))
 
     except Exception as e:
         error_type = _classify_error(e)
@@ -400,7 +398,7 @@ async def _process_one_task() -> bool:
             _update_status(task_id, "dead", error=str(e), retry_count=new_retry_count)
             logger.error("Task %d dead after %d attempts: %s", task_id, new_retry_count, e)
             if task_type == "send_to_edna":
-                await _notify_outgoing_undelivered(channel_id, payload, str(e))
+                await notify_outgoing_undelivered(channel_id, payload, str(e))
         else:
             delay = RETRY_SCHEDULE[new_retry_count - 1]
             next_attempt = datetime.utcnow() + timedelta(seconds=delay)

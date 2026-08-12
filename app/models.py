@@ -84,6 +84,23 @@ def max_bot_channel_filter():
     return or_(Channel.channel_type.is_(None), func.upper(Channel.channel_type) == MAX_BOT_TYPE)
 
 
+def bitrix_chat_id_for(channel: Channel, subscriber_identifier: str) -> str:
+    """#16: the chat id we report to Bitrix24 for this client.
+
+    MAX Bot and MAX identify the same person by the same identifier, so someone
+    writing to both channels of one portal would land in a single Open Line
+    dialog — and the operator's reply could not be routed back to the right
+    channel. Every channel except the legacy MAX Bot gets its sender prefixed to
+    the id; see `is_max_bot_channel` for what counts as legacy and why.
+
+    Lives here, next to the rule it depends on: incoming messages, undelivered
+    notices and delivery statuses all have to name the same dialog.
+    """
+    if is_max_bot_channel(channel):
+        return subscriber_identifier
+    return f"{channel.sender}:{subscriber_identifier}"
+
+
 class Message(Base):
     __tablename__ = "messages"
 
@@ -103,6 +120,16 @@ class Message(Base):
     subscriber_user_id = Column(String, nullable=True)
     user_name = Column(String, nullable=True)
     user_last_name = Column(String, nullable=True)
+    # Статусы доставки: edna присылает вебхук со ссылкой на нашу отправку —
+    # `requestId` вебхука равен `outMessageId` из ответа на неё (проверено
+    # 2026-08-12; собственный `messageId` edna для нас бесполезен). Чтобы по
+    # такому вебхуку поставить метку в Битриксе, нужны три вещи: номер сообщения
+    # открытой линии, её id и чат. Чат уже лежит в `bitrix_chat_id` выше — вопреки
+    # названию там хранится именно `im_chat_id`; а «помеченный» chat.id коннектора
+    # собирается из канала и `subscriber_identifier`.
+    edna_request_id = Column(String, nullable=True, index=True)
+    im_message_id = Column(String, nullable=True)
+    line_id = Column(String, nullable=True)
     sent_at = Column(DateTime, default=datetime.utcnow)
     raw_payload = Column(Text, nullable=True)
 

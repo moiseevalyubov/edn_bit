@@ -8,27 +8,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Channel, Message, MessageDeliveryTask, Portal, is_max_bot_channel
+from app.models import Channel, Message, MessageDeliveryTask, Portal, bitrix_chat_id_for
 from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
 from app.services.sanitize import sanitize_name, sanitize_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _bitrix_chat_id(channel: Channel, subscriber_identifier: str) -> str:
-    """#16: the chat id we report to Bitrix24 for this client.
-
-    MAX Bot and MAX identify the same person by the same identifier, so someone
-    writing to both channels of one portal would land in a single Open Line
-    dialog — and the operator's reply could not be routed back to the right
-    channel. Every channel except the legacy MAX Bot gets its sender prefixed to
-    the id; see `is_max_bot_channel` for what counts as legacy and why.
-    """
-    if is_max_bot_channel(channel):
-        return subscriber_identifier
-    return f"{channel.sender}:{subscriber_identifier}"
 
 
 def _identifier_type(subscriber: dict, subscriber_identifier: str) -> str:
@@ -206,7 +192,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
     user_phone = _subscriber_phone(subscriber)
 
     msg_id = str(data.get("id", ""))
-    chat_id = _bitrix_chat_id(channel, subscriber_identifier)
+    chat_id = bitrix_chat_id_for(channel, subscriber_identifier)
     logger.info(
         "Incoming: type=%s identifier=%s (%s) → chat_id=%s, user_name=%r",
         msg_type, subscriber_identifier, subscriber_id_type, chat_id, user_name,
