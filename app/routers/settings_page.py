@@ -137,8 +137,14 @@ SETTINGS_HTML = """<!DOCTYPE html>
     }
     .help-tile:hover { box-shadow: 0 3px 10px -2px rgba(9,164,96,.22); border-color: var(--edna-green); color: var(--edna-text); }
     .help-tile-name { font-weight: 600; font-size: 14px; color: var(--edna-text); }
+    .help-tile-ico { width: 20px; height: 20px; vertical-align: -4px; margin-right: 7px; }
     .help-tile-name .arrow { color: var(--edna-green); }
     .help-tile-sub { font-size: 12px; color: var(--edna-text-secondary); margin-top: 4px; }
+    /* Узкое окно: три плитки в ряд не помещаются — «Подключиться к edna» уходит
+       широким блоком наверх, две инструкции остаются под ней. */
+    @media (max-width: 820px) {
+      .help-tile-primary { flex-basis: 100%; }
+    }
 
     /* ---- Внутреннее модальное окно edna (вместо браузерных confirm/alert) ---- */
     .modal-backdrop-edna {
@@ -217,13 +223,32 @@ SETTINGS_HTML = """<!DOCTYPE html>
       <div class="card-body">
         <div class="help-block">
           <div class="help-block-title">Ещё нет аккаунта или канала в edna? Начните отсюда:</div>
+          <!-- Логотипы каналов MAX и MAX Bot (из макетов edna). Форма и значок общие,
+               различаются только градиенты. Конический градиент оригинала заменён линейным
+               из тех же цветов: в SVG конического нет, Figma выгружает его через foreignObject. -->
+          <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+            <defs>
+              <linearGradient id="maxGrad" x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#DB59FF"/><stop offset=".5" stop-color="#5213E2"/><stop offset="1" stop-color="#A500C6"/>
+              </linearGradient>
+              <linearGradient id="maxBotGrad" x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-color="#00CCFF"/><stop offset=".5" stop-color="#0026FF"/><stop offset="1" stop-color="#A500C6"/>
+              </linearGradient>
+              <path id="maxIcoShape" d="M20.8611 22.131C22.0666 21.2682 22.7979 20.1238 22.9081 18.6276C22.9662 17.8351 22.9999 17.0426 23.0029 16.2501C23.0121 13.0771 23.0121 9.90411 22.9938 6.73417C22.9907 6.10691 22.9417 5.47047 22.8285 4.8524C22.5593 3.35616 21.6689 2.30359 20.3623 1.57842C19.729 1.22655 19.0313 1.10416 18.3184 1.06744C17.4892 1.0246 16.66 1.00318 15.8308 1.00318C12.82 0.997064 9.81219 1.00012 6.80136 1.0093C6.08843 1.01236 5.37244 1.04296 4.67481 1.20513C3.27342 1.52641 2.27287 2.38315 1.5783 3.62542C1.22336 4.26492 1.11627 4.96561 1.05814 5.6816C1.03672 5.93556 1.01836 6.18953 1 6.44043C1 10.1367 1 13.8359 1 17.5322C1.02142 17.7953 1.03978 18.0584 1.0612 18.3216C1.11933 19.0376 1.22642 19.7413 1.58442 20.3778C2.41362 21.8526 3.6406 22.7399 5.34796 22.9082C5.66618 22.9388 5.98745 22.9541 6.30567 22.9755C6.36075 22.9786 6.41582 22.9939 6.4709 23C10.1579 23 13.845 23 17.532 23C17.7952 22.9816 18.0583 22.9602 18.3215 22.9419C19.2333 22.8837 20.1023 22.6757 20.8611 22.131Z"/>
+              <path id="maxIcoGlyph" d="M18.9989 11.5935C18.9963 11.511 18.986 11.431 18.9783 11.351C18.8243 9.72579 18.2056 8.29918 17.0785 7.12538C15.5535 5.53882 13.6717 4.84744 11.4895 5.02802C9.64361 5.18281 8.06986 5.94384 6.80674 7.31628C5.68997 8.52877 5.10206 9.97603 5.01477 11.6219C4.96599 12.5377 5.03787 13.451 5.23299 14.3487C5.39216 15.0866 5.58728 15.8166 5.76442 16.5519C5.90305 17.1246 6.00831 17.7024 6.01088 18.2932C6.01345 18.7034 6.26504 18.982 6.67068 18.9975C7.5564 19.0336 8.29065 18.6776 8.91963 18.0791C9.01719 17.9862 9.06854 17.9862 9.1738 18.0533C9.46133 18.239 9.74887 18.4274 10.0492 18.5847C10.5396 18.8375 11.0736 18.9253 11.6204 18.9588C12.6114 19.0207 13.5742 18.902 14.5035 18.5512C17.2377 17.5193 19.004 14.9524 18.9989 12.0192C18.9989 11.8773 19.0014 11.7354 18.9989 11.5935ZM13.7025 15.1227C12.9015 15.5406 12.062 15.6851 11.1866 15.4219C10.8682 15.3265 10.5678 15.1562 10.2675 15.0092C10.175 14.9627 10.1263 14.9627 10.0467 15.0298C9.85927 15.1923 9.66672 15.3497 9.46133 15.4864C9.19947 15.6593 9.07367 15.6206 8.9299 15.342C8.71682 14.9369 8.62183 14.4958 8.56021 14.0495C8.50116 13.6264 8.47549 13.1956 8.43441 12.7699C8.45495 11.9521 8.56278 11.155 8.93247 10.4172C9.52295 9.23305 10.4574 8.52877 11.7924 8.4359C13.7154 8.30175 15.4329 9.77996 15.5972 11.7019C15.7153 13.0898 14.9554 14.47 13.7025 15.1227Z"/>
+            </defs>
+          </svg>
           <div class="help-tiles">
-            <a class="help-tile" href="https://edna.ru/max/" target="_blank" rel="noopener">
+            <a class="help-tile help-tile-primary" href="https://edna.ru/max/" target="_blank" rel="noopener">
               <div class="help-tile-name">Подключиться к edna <span class="arrow">↗</span></div>
               <div class="help-tile-sub">Зарегистрироваться и подключить MAX — edna.ru/max</div>
             </a>
-            <a class="help-tile" href="https://docs-pulse.edna.ru/docs/channel/max/maxbot-connect" target="_blank" rel="noopener">
-              <div class="help-tile-name">Как подключить канал <span class="arrow">↗</span></div>
+            <a class="help-tile" href="https://docs-pulse.edna.ru/docs/channel/max/maxbot-getting-started" target="_blank" rel="noopener">
+              <div class="help-tile-name"><svg class="help-tile-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#maxIcoShape" fill="url(#maxBotGrad)"/><use href="#maxIcoGlyph" fill="#fff"/></svg>Как подключить MAX Bot <span class="arrow">↗</span></div>
+              <div class="help-tile-sub">Пошаговая инструкция в базе знаний edna</div>
+            </a>
+            <a class="help-tile" href="https://docs-pulse.edna.ru/docs/channel/max/max-getting-started" target="_blank" rel="noopener">
+              <div class="help-tile-name"><svg class="help-tile-ico" viewBox="0 0 24 24" aria-hidden="true"><use href="#maxIcoShape" fill="url(#maxGrad)"/><use href="#maxIcoGlyph" fill="#fff"/></svg>Как подключить MAX <span class="arrow">↗</span></div>
               <div class="help-tile-sub">Пошаговая инструкция в базе знаний edna</div>
             </a>
           </div>
