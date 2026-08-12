@@ -102,6 +102,17 @@ async def bind_events(portal: Portal, db: Session) -> None:
         try:
             await call_bitrix(portal, db, "event.bind", {"event": event, "handler": handler_url})
             logger.info("Bound event %s → %s", event, handler_url)
+        except httpx.HTTPStatusError as e:
+            # «Handler already binded» — не ошибка, а уже достигнутая цель. Раньше мы
+            # на этом падали и обрывали цикл на ПЕРВОМ же событии: остальные три не
+            # привязывались, а заодно не выполнялась чистка устаревших адресов ниже.
+            # Обработчик привязывается один раз при установке, поэтому при каждом
+            # открытии настроек мы неизбежно получаем этот ответ.
+            if "already binded" in (e.response.text or "").lower():
+                logger.info("Event %s already bound → %s", event, handler_url)
+                continue
+            logger.exception("Failed to bind event %s — portal may be in partial state", event)
+            raise
         except Exception:
             logger.exception("Failed to bind event %s — portal may be in partial state", event)
             raise
