@@ -197,6 +197,8 @@ async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
     try:
         await register_connector(portal, db)
         await bind_events(portal, db)
+        if portal.open_line_id:
+            await activate_connector(portal, db, portal.open_line_id)
         logger.info("Re-registered connector and events for %s", member_id)
     except Exception as e:
         logger.warning("Re-registration failed (non-critical): %s", e)

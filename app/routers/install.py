@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import Portal
-from app.services.bitrix import bind_events, register_connector
+from app.services.bitrix import activate_connector, bind_events, register_connector
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -78,6 +78,12 @@ async def install(request: Request, db: Session = Depends(get_db)):
     try:
         await register_connector(portal, db)
         await bind_events(portal, db)
+        # Удаление приложения снимает привязку коннектора к линии на стороне
+        # Битрикса, а у нас `open_line_id` остаётся — форма показывает
+        # «Подключена», но каждое входящее падает с NOT_ACTIVE_LINE.
+        if portal.open_line_id:
+            await activate_connector(portal, db, portal.open_line_id)
+            logger.info("Re-activated connector for line %s", portal.open_line_id)
     except Exception as e:
         logger.warning("Post-install setup error (non-critical): %s", e)
 
