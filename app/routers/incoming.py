@@ -16,6 +16,14 @@ from app.services.sanitize import sanitize_name, sanitize_text
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Клиент прислал то, что мы показать не можем: опрос, битое вложение без ссылки,
+# неизвестный тип. Молчать нельзя — клиент ждёт ответа, а оператор не видит даже
+# факта обращения. Кладём в диалог строку вместо самого содержимого.
+UNSUPPORTED_NOTICE = (
+    "⚠️ Клиент отправил вложение, которое невозможно отобразить. "
+    "Попросите его написать текстом."
+)
+
 
 def _identifier_type(subscriber: dict, subscriber_identifier: str) -> str:
     """#16: type of the client's primary identifier — MAX_ID or PHONE.
@@ -207,10 +215,6 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         )
         return JSONResponse({"status": "ok"})
 
-    if msg_type not in ("TEXT", "LOCATION", *_ATTACHMENT_TYPES):
-        logger.info("Incoming: unsupported message type=%s, skipping", msg_type)
-        return JSONResponse({"status": "ok"})
-
     if msg_id:
         # Dual dedup: check already-delivered (Message) and already-enqueued (MessageDeliveryTask)
         if db.query(Message).filter_by(
@@ -224,14 +228,51 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             logger.info("Incoming: duplicate message id=%s (already queued), skipping", msg_id)
             return JSONResponse({"status": "ok"})
 
+    def notify_unsupported(reason: str) -> JSONResponse:
+        """Показать оператору, что клиент написал, хотя содержимое нам недоступно.
+
+        Идёт тем же путём, что и обычное входящее: та же очередь, тот же диалог,
+        та же защита от дублей по `msg_id`.
+        """
+        logger.warning("Incoming %s: %s — уведомляем оператора", msg_type, reason)
+        try:
+            enqueue_incoming(
+                db=db,
+                channel=channel,
+                msg_type="text",
+                chat_id=chat_id,
+                user_id=subscriber_id or subscriber_identifier,
+                user_name=user_name,
+                user_last_name=user_last_name,
+                user_phone=user_phone,
+                msg_id=msg_id,
+                content_type=msg_type or "UNKNOWN",
+                subscriber_identifier=subscriber_identifier,
+                subscriber_id_type=subscriber_id_type,
+                raw_payload=json.dumps(data, ensure_ascii=False)[:2000],
+                text=UNSUPPORTED_NOTICE,
+            )
+        except IntegrityError:
+            db.rollback()
+            logger.info("Incoming: duplicate message id=%s (concurrent), skipping", msg_id)
+        except Exception as e:
+            logger.error("Incoming: failed to enqueue notice: %s", e)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
+
+    if msg_type not in ("TEXT", "LOCATION", *_ATTACHMENT_TYPES):
+        # Опрос в MAX приходит как DOCUMENT с пустыми полями, но тип может быть и
+        # незнакомым — для клиента это одинаково «я написал и жду ответа».
+        return notify_unsupported(f"неподдерживаемый тип {msg_type}")
+
     if msg_type in _ATTACHMENT_TYPES:
         attachment = msg_content.get("attachment")
         if not isinstance(attachment, dict):
             attachment = {}
         file_url = attachment.get("url")
         if not file_url:
-            logger.warning("Incoming %s: missing attachment.url", msg_type)
-            return JSONResponse({"status": "ok"})
+            # Так приходит опрос в канале MAX: type=DOCUMENT, а внутри всё null.
+            return notify_unsupported("нет attachment.url")
 
         # name is null in edna payload — extract from URL path
         file_name = attachment.get("name") or urlparse(file_url).path.split("/")[-1] or "attachment"
@@ -272,8 +313,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         lat = loc.get("latitude")
         lon = loc.get("longitude")
         if not lat or not lon:
-            logger.warning("Incoming LOCATION: missing coordinates")
-            return JSONResponse({"status": "ok"})
+            return notify_unsupported("нет координат")
 
         maps_url = f"https://yandex.ru/maps/?pt={lon},{lat}&z=16&l=map"
         # SEC-10: address comes from the client — strip HTML/JS before embedding
@@ -309,7 +349,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         # SEC-10: strip HTML/JS, SEC-7: cap to 4096 chars
         text = sanitize_text(msg_content.get("text") or "")
         if not text:
-            return JSONResponse({"status": "ok"})
+            return notify_unsupported("пустой текст")
 
         try:
             enqueue_incoming(
