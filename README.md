@@ -131,7 +131,7 @@ app/
   config.py          # настройки из переменных окружения
   database.py        # подключение к БД
 
-Procfile             # команда запуска для Render/Heroku
+Procfile             # команда запуска для PaaS без Dockerfile (Heroku-подобных); Amvera собирает по Dockerfile
 requirements.txt     # зависимости Python
 .env.example         # пример переменных окружения
 
