@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # permanent error. Used to verify the "undelivered" operator notice (#2) on a
     # live portal without touching real API keys. Off by default; toggle in Render.
     edna_force_fail: str = ""
+    # ВРЕМЕННО, проба 3 по #22: "1" включает адреса /probe22/* (app/routers/probe22.py).
+    probe_22: str = ""
 
     model_config = {"env_file": ".env"}
 
