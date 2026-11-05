@@ -132,11 +132,13 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
 
     async def test_existing_probe_code_is_updated_without_duplicate_add(self):
         code = "edna_max_" + str(self.channel_id)
-        self.remote[code] = {"NAME": "probe", "HANDLER": "https://app.invalid/probe22/send"}
+        self.remote[code] = {"NAME": "probe", "HANDLER": "https://app.invalid/probe22/send",
+                             "DESCRIPTION": "Проба #22: сообщение в MAX по номеру телефона"}
         await self.prepare()
         await self.sync()
         self.assertEqual(self.remote[code]["HANDLER"], "https://app.invalid/crm/messages/send")
         self.assertFalse(any(method == "messageservice.sender.add" for method, _ in self.calls))
+        self.assertEqual(self.remote[code]["DESCRIPTION"], "Отправка сообщений из CRM через edna")
 
     async def test_multiple_channels_have_independent_codes_and_max_bot_stays_out(self):
         with self.Session() as db:

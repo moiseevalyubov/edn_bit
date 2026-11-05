@@ -108,7 +108,8 @@ async def _apply_remote(portal, db, provider_code, state, name, handler):
                 if result is not True:
                     raise CrmBitrixError("sender_delete_unsuccessful", True)
         return
-    params = {"CODE": provider_code, "NAME": name, "HANDLER": handler}
+    params = {"CODE": provider_code, "NAME": name, "HANDLER": handler,
+              "DESCRIPTION": "Отправка сообщений из CRM через edna"}
     if provider_code not in codes:
         try:
             result = await call_crm_method(portal, db, "messageservice.sender.add", {**params, "TYPE": "SMS"})
