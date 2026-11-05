@@ -124,7 +124,7 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.tasks(SYNC_CRM_PROVIDER)), 1)
         await self.sync()
         code = "edna_max_" + str(self.channel_id)
-        self.assertEqual(self.remote[code]["NAME"], "MAX от edna — Test MAX")
+        self.assertEqual(self.remote[code]["NAME"], "Test MAX в приложении MAX от edna")
         self.assertEqual(self.remote[code]["HANDLER"], "https://app.invalid/crm/messages/send")
         with self.Session() as db:
             self.assertEqual(db.query(CrmMessageProvider).one().sync_state, "ready")
@@ -174,7 +174,7 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
             db.commit()
         await self.sync()
         self.assertEqual(len(self.remote), 1)
-        self.assertEqual(next(iter(self.remote.values()))["NAME"], "MAX от edna — New name")
+        self.assertEqual(next(iter(self.remote.values()))["NAME"], "New name в приложении MAX от edna")
 
     async def test_disconnect_cancels_unsent_but_preserves_accepted_and_late_read(self):
         await self.prepare()
@@ -370,7 +370,7 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
             return response
         with patch.object(self, "bitrix", side_effect=rename_during_update):
             await self.sync()
-        self.assertEqual(next(iter(self.remote.values()))["NAME"], "MAX от edna — Changed during HTTP")
+        self.assertEqual(next(iter(self.remote.values()))["NAME"], "Changed during HTTP в приложении MAX от edna")
         with self.Session() as db:
             provider = db.query(CrmMessageProvider).one()
             self.assertEqual(provider.applied_revision, provider.desired_revision)

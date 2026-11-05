@@ -56,7 +56,7 @@ def stage_provider(db, portal, channel, *, force=False):
             provider_code=f"{capability.code_prefix}_{channel.id}", desired_revision=0, applied_revision=0, sync_state="absent")
         db.add(provider)
     state = "present" if present else "absent"
-    name = f"{capability.label} — {channel.name}" if capability else provider.desired_name
+    name = f"{channel.name} в приложении {capability.label}" if capability else provider.desired_name
     handler = provider.desired_handler
     if present:
         base = urlsplit(settings.app_base_url)
