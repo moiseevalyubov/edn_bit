@@ -175,6 +175,8 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="main" style="display:none">
+    <div id="crmNotice" class="alert alert-info d-none"></div>
+    <div id="crmUncertain" class="alert alert-warning d-none"></div>
     <div id="paymentNotice" class="d-none mb-4" style="background:#fffbf0; border-left:3px solid #e0c060; border-radius:4px; padding:10px 16px; font-size:13px; color:#666;">
       Подписка Bitrix истекла. Канал может не работать в Открытых линиях.
     </div>
@@ -318,6 +320,80 @@ SETTINGS_HTML = """<!DOCTYPE html>
 <script>
 var memberId = null;
 var openLinesData = null;
+var crmAvailable = false;
+var crmAdmin = false;
+var channelNames = {};
+var crmPreparationNotice = '';
+
+function appHeaders() {
+  var headers = {'Content-Type': 'application/json'};
+  var auth = BX24.getAuth();
+  if (auth && auth.access_token) headers.Authorization = 'Bearer ' + auth.access_token;
+  return headers;
+}
+
+function prepareCrm() {
+  return fetch('/api/crm/prepare', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
+    .then(function(r) {
+      return r.json().then(function(data) {
+        if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Не удалось подготовить отправку из CRM');
+        crmAvailable = data.state !== 'disabled';
+        crmAdmin = crmAvailable;
+        var messages = {
+          scope_required: 'Для отправки из карточек CRM администратору нужно подтвердить новое разрешение при обновлении приложения.',
+          app_token_required: 'Отправка из CRM пока недоступна: нужно проверить установку приложения. Обратитесь в поддержку edna.',
+          server_authorization_required: 'Отправка из CRM пока недоступна: нужно обновить авторизацию приложения. Обратитесь в поддержку edna.'
+        };
+        var notice = document.getElementById('crmNotice');
+        crmPreparationNotice = messages[data.state] || '';
+        notice.textContent = crmPreparationNotice;
+        notice.classList.toggle('d-none', !messages[data.state]);
+        renderCrmDiagnostics(data);
+        if (crmAvailable) setTimeout(refreshCrmDiagnostics, 4000);
+      });
+    }).catch(function(error) {
+      var notice = document.getElementById('crmNotice');
+      notice.textContent = error.message;
+      notice.classList.remove('d-none');
+    });
+}
+
+function refreshCrmDiagnostics() {
+  if (!crmAdmin) return;
+  fetch('/api/crm/diagnostics', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
+    .then(function(r) { if (!r.ok) throw new Error('Не удалось обновить состояние отправки из CRM'); return r.json(); })
+    .then(function(data) {
+      renderCrmDiagnostics(data);
+      if ((data.uncertain || []).length || (data.providers || []).some(function(p) { return p.state === 'pending' || p.state === 'error'; })) {
+        setTimeout(refreshCrmDiagnostics, 15000);
+      }
+    }).catch(function() {});
+}
+
+function renderCrmDiagnostics(data) {
+  var notice = document.getElementById('crmNotice');
+  if (data.providers && !crmPreparationNotice) {
+    var pending = data.providers.some(function(p) { return p.state === 'pending'; });
+    var failed = data.providers.some(function(p) { return p.state === 'error'; });
+    notice.textContent = failed ? 'Не удалось обновить список каналов в CRM. Приложение повторит попытку; если сообщение сохраняется, обратитесь в поддержку edna.' : (pending ? 'Обновляем каналы в карточках CRM…' : '');
+    notice.classList.toggle('d-none', !notice.textContent);
+  }
+  var block = document.getElementById('crmUncertain');
+  var rows = data.uncertain || [];
+  block.classList.toggle('d-none', rows.length === 0);
+  block.textContent = '';
+  if (rows.length) {
+    var intro = document.createElement('p');
+    intro.textContent = 'Результат отправки некоторых сообщений пока неизвестен. Не отправляйте их повторно до проверки в поддержке edna: клиент мог уже получить текст.';
+    block.appendChild(intro);
+    rows.forEach(function(row) {
+      var detail = document.createElement('div');
+      var date = row.started_at ? new Date(row.started_at + 'Z').toLocaleString('ru-RU') : '';
+      detail.textContent = row.channel + ' · ' + date + ' · CRM: ' + row.message_id + ' · edna: ' + row.out_message_id;
+      block.appendChild(detail);
+    });
+  }
+}
 
 BX24.init(function() {
   BX24.callMethod('profile', {}, function(res) {
@@ -330,13 +406,14 @@ BX24.init(function() {
     if (auth.domain) {
       fetch('/api/portal/repair-endpoint', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: appHeaders(),
         body: JSON.stringify({member_id: memberId, domain: auth.domain})
       }).catch(function() {});
     }
     loadChannels();
     loadOpenLines();
     loadPortalStatus();
+    prepareCrm().then(loadChannels);
   });
 });
 
@@ -405,7 +482,7 @@ function createOpenLine() {
     var btn = document.getElementById('createLineBtn');
     btn.disabled = true;
     btn.textContent = 'Создаём...';
-    fetch('/api/open-lines/create?member_id=' + encodeURIComponent(memberId), {method: 'POST'})
+    fetch('/api/open-lines/create?member_id=' + encodeURIComponent(memberId), {method: 'POST', headers: appHeaders()})
       .then(function(r) {
         if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
         return r.json();
@@ -451,7 +528,7 @@ function saveOpenLine() {
   document.getElementById('openLineError').classList.add('d-none');
   fetch('/api/portal/open-line', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: appHeaders(),
     body: JSON.stringify({member_id: memberId, line_id: lineId})
   })
   .then(function(r) {
@@ -477,6 +554,7 @@ function renderChannels(channels) {
   var rows = [];
 
   channels.forEach(function(ch, idx) {
+    channelNames[ch.id] = ch.name;
     var date = new Date(ch.connected_at).toLocaleDateString('ru-RU');
     var badge = ch.is_active
       ? '<span class="badge badge-active rounded-pill">Активен</span>'
@@ -484,6 +562,7 @@ function renderChannels(channels) {
     var btn = ch.is_active
       ? '<button class="btn btn-outline-danger btn-sm" onclick="disconnect(' + ch.id + ')">Отключить</button>'
       : '';
+    if (crmAdmin) btn = '<button class="btn btn-outline-secondary btn-sm me-1" onclick="renameChannel(' + ch.id + ')">Переименовать</button>' + btn;
     var hiddenAttr = idx >= 3 ? ' class="channel-hidden" style="display:none"' : '';
     rows.push('<tr' + hiddenAttr + '>' +
       '<td>' + esc(ch.name) + '</td>' +
@@ -534,7 +613,7 @@ function saveChannel() {
 
   fetch('/api/channels', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: appHeaders(),
     body: JSON.stringify({member_id: memberId, name: name, api_key: apiKey, sender: sender})
   })
   .then(function(r) {
@@ -555,6 +634,7 @@ function saveChannel() {
       document.getElementById('sender').value = '';
       showWebhookResult(data);
       loadChannels();
+      if (crmAvailable) refreshCrmDiagnostics();
     });
   })
   .catch(function() {
@@ -566,13 +646,13 @@ function saveChannel() {
 function disconnect(channelId) {
   showConfirm('Отключить канал?', function() {
     fetch('/api/channels/' + channelId + '/disconnect?member_id=' + encodeURIComponent(memberId), {
-      method: 'POST'
+      method: 'POST', headers: appHeaders()
     })
     .then(function(r) {
       if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || 'Ошибка'); });
       return r.json();
     })
-    .then(function() { loadChannels(); })
+    .then(function() { loadChannels(); if (crmAvailable) refreshCrmDiagnostics(); })
     .catch(function(e) { showNotice('Ошибка: ' + e.message); });
   });
 }
@@ -596,6 +676,24 @@ function showWebhookResult(data) {
     }
   }
   document.getElementById('webhookBlock').classList.remove('d-none');
+}
+
+function renameChannel(channelId) {
+  showModal({title: 'Название канала', message: '', showCancel: true, okText: 'Сохранить', onOk: function() {
+    var name = document.getElementById('renameChannelInput').value.trim();
+    if (!name) { showNotice('Введите название канала'); return; }
+    fetch('/api/channels/' + channelId, {method: 'PATCH', headers: appHeaders(), body: JSON.stringify({member_id: memberId, name: name})})
+      .then(function(r) { if (!r.ok) return r.json().then(function(e) { throw new Error(typeof e.detail === 'string' ? e.detail : 'Не удалось изменить название'); }); return r.json(); })
+      .then(function() { loadChannels(); refreshCrmDiagnostics(); })
+      .catch(function(e) { showNotice(e.message); });
+  }});
+  var input = document.createElement('input');
+  input.id = 'renameChannelInput';
+  input.className = 'form-control';
+  input.maxLength = 128;
+  input.value = channelNames[channelId] || '';
+  document.getElementById('modalMessage').appendChild(input);
+  input.focus();
 }
 
 function copyWebhook() {

@@ -5,14 +5,16 @@ import uuid
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.models import Channel, Portal
-from app.schemas import ChannelCreate, ChannelResponse, ChannelSaveResponse, OpenLineSet
+from app.schemas import ChannelCreate, ChannelRename, ChannelResponse, ChannelSaveResponse, OpenLineSet
+from app.services.crm_auth import require_channel_admin
+from app.services.crm_providers import stage_provider
 from app.services.bitrix import activate_connector, bind_events, create_open_line, get_open_lines, register_connector
 from app.services.maxbot import WebhookSetupError, configure_incoming_webhook
 
@@ -49,8 +51,11 @@ def list_channels(member_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/channels", response_model=ChannelSaveResponse)
-async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
+async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     portal = get_portal_or_404(body.member_id, db)
+    await require_channel_admin(portal, db, authorization)
+    if (settings.crm_outreach_enabled or portal.crm_outreach_enabled) and (not body.name.strip() or len(body.name.strip()) > 128):
+        raise HTTPException(422, "Название должно содержать от 1 до 128 символов")
 
     duplicate_sender = db.query(Channel).filter_by(
         portal_id=portal.id, sender=body.sender, is_active=True
@@ -111,6 +116,9 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
             body.sender, type(e).__name__, e,
         )
 
+    portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
+    if portal.uninstalled_at is not None:
+        raise HTTPException(409, "Приложение было удалено во время подключения")
     channel = Channel(
         portal_id=portal.id,
         name=body.name,
@@ -122,6 +130,8 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db)):
         is_active=True,
     )
     db.add(channel)
+    db.flush()
+    stage_provider(db, portal, channel)
     db.commit()
     db.refresh(channel)
 
@@ -147,8 +157,9 @@ async def list_open_lines(member_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/open-lines/create")
-async def create_line(member_id: str, db: Session = Depends(get_db)):
+async def create_line(member_id: str, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     portal = get_portal_or_404(member_id, db)
+    await require_channel_admin(portal, db, authorization)
     try:
         line_id = await create_open_line(portal, db, "edna MAX")
         await activate_connector(portal, db, line_id)
@@ -160,8 +171,9 @@ async def create_line(member_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/portal/open-line")
-async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
+async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     portal = get_portal_or_404(body.member_id, db)
+    await require_channel_admin(portal, db, authorization)
     try:
         await activate_connector(portal, db, body.line_id)
     except Exception as e:
@@ -172,7 +184,7 @@ async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db)):
 
 
 @router.post("/portal/repair-endpoint")
-async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
+async def repair_endpoint(body: dict, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     member_id = body.get("member_id", "")
     domain = body.get("domain", "")
     if not member_id or not domain:
@@ -190,6 +202,7 @@ async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
     portal = db.query(Portal).filter_by(member_id=member_id).first()
     if not portal:
         raise HTTPException(status_code=404, detail="Портал не найден")
+    await require_channel_admin(portal, db, authorization)
     if not portal.client_endpoint:
         portal.client_endpoint = f"https://{domain}/rest/"
         db.commit()
@@ -206,10 +219,34 @@ async def repair_endpoint(body: dict, db: Session = Depends(get_db)):
 
 
 @router.post("/channels/{channel_id}/disconnect")
-def disconnect_channel(channel_id: int, member_id: str, db: Session = Depends(get_db)):
+async def disconnect_channel(channel_id: int, member_id: str, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
     portal = get_portal_or_404(member_id, db)
+    await require_channel_admin(portal, db, authorization)
+    portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
     channel = get_channel_for_portal(channel_id, portal, db)
+    channel = db.query(Channel).filter_by(id=channel.id).populate_existing().with_for_update().one()
     channel.is_active = False
     channel.disconnected_at = datetime.utcnow()
+    stage_provider(db, portal, channel)
     db.commit()
     return {"success": True}
+
+
+@router.patch("/channels/{channel_id}", response_model=ChannelResponse)
+async def rename_channel(channel_id: int, body: ChannelRename, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
+    portal = get_portal_or_404(body.member_id, db)
+    await require_channel_admin(portal, db, authorization, always=True)
+    name = body.name.strip()
+    if not name or len(name) > 128:
+        raise HTTPException(422, "Название должно содержать от 1 до 128 символов")
+    portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
+    channel = get_channel_for_portal(channel_id, portal, db)
+    channel = db.query(Channel).filter_by(id=channel.id).populate_existing().with_for_update().one()
+    duplicate = db.query(Channel).filter(Channel.portal_id == portal.id, Channel.id != channel.id, func.lower(Channel.name) == name.lower()).first()
+    if duplicate:
+        raise HTTPException(422, "Название должно быть уникальным")
+    channel.name = name
+    stage_provider(db, portal, channel)
+    db.commit()
+    db.refresh(channel)
+    return channel

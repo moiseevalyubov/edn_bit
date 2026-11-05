@@ -88,7 +88,7 @@ async def send_media(api_key: str, sender: str, max_id: str, content_type: str, 
 # --- #16: MAX channel (separate endpoint and body format from MAX Bot) ---
 
 
-async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, content: dict) -> dict:
+async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, content: dict, *, out_message_id: str | None = None) -> dict:
     """POST /v1/out-messages/max — same idea as _post, different body shape.
 
     MAX Bot sends {"sender", "maxId", "content"}; MAX sends {"from", "to", "content"}
@@ -96,7 +96,12 @@ async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, cont
     if to_type not in VALID_ID_TYPES:
         raise ValueError(f"Invalid to_type '{to_type}'. Must be one of {VALID_ID_TYPES}")
     payload = {"from": sender, "to": {"value": to_value, "type": to_type}, "content": content}
-    logger.info("edna MAX request payload: %s", payload)
+    if out_message_id is not None:
+        payload["outMessageId"] = out_message_id
+    if out_message_id is None:
+        logger.info("edna MAX request payload: %s", payload)
+    else:
+        logger.info("edna MAX CRM request %s", out_message_id)
     async with httpx.AsyncClient() as client:
         response = await client.post(
             MAX_API_URL,
@@ -104,15 +109,18 @@ async def _post_max(api_key: str, sender: str, to_value: str, to_type: str, cont
             json=payload,
             timeout=10,
         )
-    if not response.is_success:
+    if out_message_id is not None:
+        logger.info("edna MAX CRM response (id=%s, HTTP=%s)", out_message_id, response.status_code)
+    elif not response.is_success:
         logger.error("edna MAX error %s: %s", response.status_code, response.text[:500])
     response.raise_for_status()
-    logger.info("edna MAX response: %s", response.text[:500])
+    if out_message_id is None:
+        logger.info("edna MAX response: %s", response.text[:500])
     return response.json()
 
 
-async def send_message_max(api_key: str, sender: str, to_value: str, to_type: str, text: str) -> dict:
-    return await _post_max(api_key, sender, to_value, to_type, {"type": "TEXT", "text": text})
+async def send_message_max(api_key: str, sender: str, to_value: str, to_type: str, text: str, *, out_message_id: str | None = None) -> dict:
+    return await _post_max(api_key, sender, to_value, to_type, {"type": "TEXT", "text": text}, out_message_id=out_message_id)
 
 
 async def send_media_max(

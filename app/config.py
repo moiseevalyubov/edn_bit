@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     edna_force_fail: str = ""
     # ВРЕМЕННО, проба 3 по #22: "1" включает адреса /probe22/* (app/routers/probe22.py).
     probe_22: str = ""
+    # #22: working CRM outreach stays off until the staged implementation and
+    # portal checks are complete. These are deployment controls, not UI steps.
+    crm_outreach_enabled: bool = False
+    bitrix_expected_app_code: str = ""
 
     model_config = {"env_file": ".env"}
 

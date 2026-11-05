@@ -5,8 +5,9 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
-from app.routers import api, files, handler, incoming, install, probe22, settings_page, status
+from app.routers import api, crm_management, crm_messages, files, handler, incoming, install, probe22, settings_page, status
 from app.config import settings
+from app.migrations.crm_outreach_v1 import migrate_crm_outreach
 
 logging.basicConfig(
     level=logging.INFO,
@@ -14,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-Base.metadata.create_all(bind=engine)
+migrate_crm_outreach(engine, Base.metadata)
 
 # SEC-1: backfill webhook_token for channels created before this field existed
 from sqlalchemy import text
@@ -222,6 +223,8 @@ app.include_router(api.router)
 app.include_router(files.router)
 app.include_router(settings_page.router)
 app.include_router(probe22.router)  # ВРЕМЕННО, проба 3 по #22
+app.include_router(crm_messages.router)
+app.include_router(crm_management.router)
 
 
 @app.get("/health")

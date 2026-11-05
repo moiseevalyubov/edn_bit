@@ -1,6 +1,8 @@
 # Схема базы данных — MAX Bot Bitrix24 Connector
 
-## Пять таблиц
+## Пять основных таблиц
+
+Основа #22 добавляет ещё три таблицы CRM и два поля существующих таблиц. Она реализована локально, но пока не выложена на стенд; состояние проверок — [CRM_OUTREACH_PROGRESS.md](CRM_OUTREACH_PROGRESS.md).
 
 ### `portals` — порталы Bitrix24
 
@@ -19,6 +21,7 @@
 | `installed_at` | DateTime | Когда установили приложение |
 | `uninstalled_at` | DateTime | Когда удалили (NULL — активен) |
 | `payment_required_at` | DateTime | Когда истекла подписка Bitrix24 (NULL — подписка активна) |
+| `crm_outreach_enabled` | Boolean, default false | Внутреннее включение CRM-функции по порталу; поле основы #22 |
 
 ---
 
@@ -92,6 +95,7 @@
 | `next_attempt_at` | DateTime | Когда worker должен следующий раз попробовать |
 | `last_error` | Text | Последнее сообщение об ошибке (до 2000 символов) |
 | `max_message_id` | String | ID сообщения в MAX Bot — для дедупликации входящих задач |
+| `dedup_key` | String, nullable | Устойчивый ключ CRM-операции; у прежних задач NULL. Уникальный индекс только непустых ключей |
 | `created_at` | DateTime | Когда создана задача |
 | `updated_at` | DateTime | Когда последний раз обновлялась |
 
@@ -103,6 +107,20 @@
 - `dead` — 6 временных ошибок подряд — повтора не будет
 
 **Уникальный индекс:** `(channel_id, max_message_id) WHERE direction='incoming'` — защита от дубликатов при параллельных вебхуках.
+
+## Таблицы основы CRM (#22)
+
+| Таблица | Данные | Ограничения |
+|---|---|---|
+| `crm_message_providers` | Портал, канал, CODE, желаемое состояние/имя/HANDLER, версии синхронизации и ошибка | Один provider на Channel; CODE уникален в пределах портала |
+| `crm_outgoing_messages` | Портал, канал, CRM-message ID, bindings, автор, текст, телефон, outMessageId, состояние отправки и подтверждённые статусы | UNIQUE(portal_id, provider_code, bitrix_message_id), UNIQUE(channel_id, edna_out_message_id) |
+| `crm_message_status_events` | Статус и время edna, requestId, ошибка и fingerprint для CRM-сообщения | UNIQUE(crm_message_id, fingerprint) |
+
+Определения полей находятся в [app/models.py](../app/models.py). Сырые auth, API-ключи и OAuth-токены в этих таблицах не хранятся. История Открытых линий остаётся в Message.
+
+Типы очереди: `send_crm_to_edna`, `update_crm_status`, `sync_crm_provider`. Все три исполнителя подключены локально. Сообщение и его задачи, канал и желаемое состояние provider сохраняются одной транзакцией соответствующей операции; payload содержит внутренний ID/версию, без auth/телефона/текста. До HTTP фиксируются sending и attempt_started_at. Прерванная CRM-отправка с неизвестным результатом получает `uncertain`, автоматического повторного POST нет. Статусы и синхронизация provider имеют независимые повторы и desired/applied_revision; READ сохраняется в БД и отображается как delivered через API CRM. При выключении новые отправки не исполняются, queued отменяются локальной сверкой, планируется удаление provider; статусы уже переданных сообщений продолжают обрабатываться. Фактическая возможность обновить статус после удаления sender ещё требует проверки Битрикс24. Состояние реализации и ограничения: [CRM_OUTREACH_PROGRESS.md](CRM_OUTREACH_PROGRESS.md).
+
+Добавочная миграция [crm_outreach_v1.py](../app/migrations/crm_outreach_v1.py) вызывается до worker. На PostgreSQL блокировка охватывает проверку схемы и DDL одной транзакцией. Старые строки, шифротекст и идентификаторы не переписываются.
 
 ---
 

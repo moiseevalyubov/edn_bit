@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Channel, Message, MessageDeliveryTask, Portal, is_max_bot_channel
+from app.models import Channel, CrmOutgoingMessage, Message, MessageDeliveryTask, Portal, is_max_bot_channel
 from app.services.bitrix import (
     send_file_to_bitrix,
     send_message_to_bitrix,
@@ -23,6 +23,9 @@ from app.services.maxbot import (
     send_message_max,
 )
 from app.services.token import PaymentRequiredError
+from app.services.task_types import SEND_CRM_TO_EDNA, SEND_TO_BITRIX, SEND_TO_EDNA, SYNC_CRM_PROVIDER, UPDATE_CRM_STATUS
+from app.services.crm_worker import execute_crm_task
+from app.services.crm_providers import execute_provider_task, reconcile_local_providers
 
 logger = logging.getLogger(__name__)
 
@@ -337,9 +340,13 @@ async def _process_one_task() -> bool:
     db = SessionLocal()
     try:
         now = datetime.utcnow()
+        held_types = []
+        if not settings.crm_outreach_enabled:
+            held_types.append(SEND_CRM_TO_EDNA)
         task = (
             db.query(MessageDeliveryTask)
             .filter_by(status="pending")
+            .filter(MessageDeliveryTask.task_type.notin_(held_types))
             .filter(MessageDeliveryTask.next_attempt_at <= now)
             .order_by(MessageDeliveryTask.next_attempt_at)
             .first()
@@ -372,12 +379,27 @@ async def _process_one_task() -> bool:
     finally:
         db.close()
 
-    payload = json.loads(payload_str)
+    if task_type in {SEND_CRM_TO_EDNA, UPDATE_CRM_STATUS}:
+        await execute_crm_task(task_id, task_type, SessionLocal)
+        return True
+    if task_type == SYNC_CRM_PROVIDER:
+        await execute_provider_task(task_id, SessionLocal)
+        return True
 
+    payload = {}
     try:
-        if task_type == "send_to_bitrix":
+        if task_type not in {SEND_TO_BITRIX, SEND_TO_EDNA}:
+            raise RuntimeError("Unsupported delivery task type: %s" % task_type)
+        try:
+            payload = json.loads(payload_str)
+            if not isinstance(payload, dict):
+                raise ValueError("Expected an object")
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("Invalid delivery task payload") from exc
+
+        if task_type == SEND_TO_BITRIX:
             await _execute_incoming(channel_id, payload)
-        else:
+        elif task_type == SEND_TO_EDNA:
             await _execute_outgoing(channel_id, payload)
 
         _update_status(task_id, "sent")
@@ -430,13 +452,46 @@ async def _reset_stale_tasks() -> None:
             .all()
         )
         for t in stale:
-            t.status = "pending"
+            if t.task_type == SEND_CRM_TO_EDNA:
+                _recover_crm_send(db, t)
+            else:
+                t.status = "pending"
             t.updated_at = datetime.utcnow()
         if stale:
             db.commit()
-            logger.warning("Reset %d stale processing tasks to pending", len(stale))
+            logger.warning("Recovered %d stale processing tasks", len(stale))
     finally:
         db.close()
+
+
+def _recover_crm_send(db: Session, task: MessageDeliveryTask) -> None:
+    """A crashed CRM send must not become an automatic second HTTP send."""
+    try:
+        payload = json.loads(task.payload)
+        message_id = payload.get("crm_message_id") if isinstance(payload, dict) else None
+        if not isinstance(message_id, int) or isinstance(message_id, bool):
+            message_id = None
+    except (ValueError, TypeError):
+        message_id = None
+    message = (
+        db.query(CrmOutgoingMessage)
+        .filter_by(id=message_id, channel_id=task.channel_id)
+        .with_for_update()
+        .first()
+    ) if message_id is not None else None
+
+    if message and message.send_state in {"accepted", "sent", "delivered", "read"}:
+        task.status = "sent"
+    elif message and message.send_state in {"failed", "cancelled"}:
+        task.status = "failed"
+    elif message and message.send_state == "queued" and message.attempt_started_at is None:
+        task.status = "pending"
+    else:
+        task.status = "uncertain"
+        task.last_error = "CRM send interrupted; delivery outcome must be reconciled before retry"
+        if message:
+            message.send_state = "uncertain"
+            message.updated_at = datetime.utcnow()
 
 
 async def _worker_loop() -> None:
@@ -444,9 +499,18 @@ async def _worker_loop() -> None:
     await _reset_stale_tasks()
     logger.info("Delivery worker started")
     last_stale_check = datetime.utcnow()
+    last_crm_reconcile = datetime.min
 
     while True:
         try:
+            if (datetime.utcnow() - last_crm_reconcile).total_seconds() >= 60:
+                last_crm_reconcile = datetime.utcnow()
+                try:
+                    reconcile_local_providers(SessionLocal)
+                except Exception:
+                    # A CRM repair failure must not stop existing Open Line
+                    # deliveries. SQL exception text may contain private binds.
+                    logger.error("CRM provider reconciliation failed; will retry in 60 seconds")
             processed = await _process_one_task()
             if not processed:
                 await asyncio.sleep(2)

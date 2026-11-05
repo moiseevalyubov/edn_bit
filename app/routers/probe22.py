@@ -29,7 +29,7 @@ _SECRET_AUTH_KEYS = {"access_token", "refresh_token", "application_token"}
 
 
 def _require_enabled() -> None:
-    if settings.probe_22 != "1":
+    if settings.probe_22 != "1" or settings.crm_outreach_enabled:
         raise HTTPException(status_code=404)
 
 
@@ -46,6 +46,8 @@ def _active_channel(db, sender: str) -> Channel:
     )
     if not channel or not channel.portal:
         raise HTTPException(status_code=404, detail="Активный канал с таким sender не найден")
+    if channel.portal.crm_outreach_enabled:
+        raise HTTPException(status_code=404)
     return channel
 
 
@@ -98,10 +100,12 @@ async def unregister(sender: str):
 async def _mark_delivered(member_id: str, code: str, message_id: str) -> None:
     # Ждём, пока Битрикс сохранит сообщение у себя: обработчик зовётся до этого.
     await asyncio.sleep(3)
+    if settings.crm_outreach_enabled:
+        return
     db = SessionLocal()
     try:
         portal = db.query(Portal).filter_by(member_id=member_id).first()
-        if not portal:
+        if not portal or portal.crm_outreach_enabled:
             logger.warning("Probe22: портал %s не найден — статус не ставим", member_id)
             return
         result = await _call(portal, db, "messageservice.message.status.update", {
@@ -137,7 +141,7 @@ async def send(request: Request, background_tasks: BackgroundTasks):
     db = SessionLocal()
     try:
         portal = db.query(Portal).filter_by(member_id=member_id).first() if member_id else None
-        token_ok = bool(portal) and (not portal.app_token or portal.app_token == auth.get("application_token"))
+        token_ok = bool(portal) and not portal.crm_outreach_enabled and (not portal.app_token or portal.app_token == auth.get("application_token"))
     finally:
         db.close()
     if not token_ok:

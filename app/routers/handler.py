@@ -80,6 +80,10 @@ def _parse_php_form(flat: dict) -> dict:
 
 
 def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
+    if settings.crm_outreach_enabled or portal.crm_outreach_enabled:
+        # Event OAuth belongs to the initiating employee. Preserve the admin
+        # installation credentials required by provider management.
+        return
     if not auth.get("access_token"):
         return
     portal.access_token = auth["access_token"]
@@ -188,12 +192,17 @@ async def handler(request: Request, db: Session = Depends(get_db)):
 async def _handle_app_uninstall(portal: Portal, db: Session) -> None:
     logger.info("App uninstalled from portal %s — marking as uninstalled", portal.member_id)
     deactivated = 0
-    for channel in portal.channels:
+    from app.services.crm_providers import stage_provider
+    portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
+    portal.uninstalled_at = datetime.utcnow()
+    portal.crm_outreach_enabled = False
+    channels = db.query(Channel).filter_by(portal_id=portal.id).order_by(Channel.id).with_for_update().all()
+    for channel in channels:
         if channel.is_active:
             channel.is_active = False
             channel.disconnected_at = datetime.utcnow()
             deactivated += 1
-    portal.uninstalled_at = datetime.utcnow()
+        stage_provider(db, portal, channel)
     db.commit()
     logger.info("Portal %s marked as uninstalled, %d channels deactivated",
                 portal.member_id, deactivated)

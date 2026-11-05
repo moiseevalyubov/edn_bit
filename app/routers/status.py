@@ -30,12 +30,14 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.database import get_db
 from app.models import Channel, Message, Portal, bitrix_chat_id_for
 from app.services.bitrix import send_delivery_status
 from app.services.delivery_worker import notify_outgoing_undelivered
 from app.services.rate_limiter import rate_limiter
+from app.services.crm_outreach import CrmRequestError, record_edna_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -63,27 +65,44 @@ async def status_callback(webhook_token: str, request: Request, db: Session = De
         return JSONResponse({"error": "too_many_requests"}, status_code=429)
 
     # SEC-1: тот же токен, что и у входящих сообщений — чужой адрес сюда не достучится.
-    channel = db.query(Channel).filter_by(webhook_token=webhook_token, is_active=True).first()
+    channel = db.query(Channel).filter_by(webhook_token=webhook_token).first()
     if not channel:
         logger.warning("Status: invalid webhook token %s", webhook_token[:8] + "...")
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
     body = await request.body()
-    logger.info(
-        "Status webhook (channel %s, type %s): %s",
-        channel.id, channel.channel_type or "unknown", body[:500],
-    )
-
     try:
         data = json.loads(body)
     except Exception:
         # Повтор такого же тела ничего не изменит — отвечаем 200, чтобы edna не
         # тратила свои три попытки впустую.
         logger.error("Status: не удалось разобрать JSON")
+        if not channel.is_active:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         return _ok()
     if not isinstance(data, dict):
         logger.error("Status: тело не является JSON-объектом")
+        if not channel.is_active:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         return _ok()
+
+    try:
+        if record_edna_status(db, channel, data):
+            db.commit()
+            return _ok()
+    except CrmRequestError as exc:
+        db.rollback()
+        return JSONResponse({"error": exc.code}, status_code=exc.status_code)
+    except SQLAlchemyError:
+        db.rollback()
+        logger.error("CRM delivery fact could not be saved; webhook must be retried")
+        return JSONResponse({"error": "service_unavailable"}, status_code=503)
+
+    # Known CRM receipts still accept late delivery facts after disconnection.
+    # Legacy messages keep their previous active-channel restriction.
+    if not channel.is_active:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    logger.info("Status webhook (channel %s, type %s): %s", channel.id, channel.channel_type or "unknown", body[:500])
 
     # requestId вебхука = outMessageId из ответа на отправку. Собственный messageId
     # edna к нашим данным не привязан и для сопоставления бесполезен.

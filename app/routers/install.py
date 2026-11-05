@@ -6,8 +6,11 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.config import settings
 from app.models import Portal
 from app.services.bitrix import activate_connector, bind_events, register_connector
+from app.services.crm_auth import require_channel_admin
+from app.services.crm_providers import stage_portal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -55,12 +58,19 @@ async def install(request: Request, db: Session = Depends(get_db)):
     portal = db.query(Portal).filter_by(member_id=member_id).first()
 
     if portal:
+        # Authenticate updates against the saved endpoint BEFORE accepting a new
+        # endpoint, app token or credentials supplied by the install request.
+        await require_channel_admin(portal, db, "Bearer " + access_token, allow_uninstalled=True)
+        portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
         portal.access_token = access_token
         portal.refresh_token = refresh_token_val or portal.refresh_token
         portal.token_expires_at = datetime.utcnow() + timedelta(seconds=auth_expires)
-        portal.client_endpoint = client_endpoint or portal.client_endpoint
+        if not (portal.crm_outreach_enabled or settings.crm_outreach_enabled):
+            portal.client_endpoint = client_endpoint or portal.client_endpoint
         portal.app_token = app_token or portal.app_token
         portal.uninstalled_at = None
+        portal.crm_outreach_enabled = False
+        stage_portal(db, portal)
     else:
         portal = Portal(
             member_id=member_id,

@@ -11,6 +11,11 @@ class ChannelCreate(BaseModel):
     sender: str
 
 
+class ChannelRename(BaseModel):
+    member_id: str
+    name: str
+
+
 class ChannelResponse(BaseModel):
     id: int
     name: str

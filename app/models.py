@@ -1,6 +1,9 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, func, or_
+from sqlalchemy import (
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text,
+    UniqueConstraint, false, func, or_,
+)
 from sqlalchemy import types
 from sqlalchemy.orm import relationship
 
@@ -38,6 +41,7 @@ class Portal(Base):
     installed_at = Column(DateTime, default=datetime.utcnow)
     uninstalled_at = Column(DateTime, nullable=True)
     payment_required_at = Column(DateTime, nullable=True)
+    crm_outreach_enabled = Column(Boolean, nullable=False, default=False, server_default=false())
 
     channels = relationship("Channel", back_populates="portal")
 
@@ -157,5 +161,85 @@ class MessageDeliveryTask(Base):
     next_attempt_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_error = Column(Text, nullable=True)
     max_message_id = Column(String, nullable=True)  # for dedup on incoming tasks
+    # NULL for legacy tasks; new CRM operations use a durable operation key.
+    dedup_key = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (Index(
+        "uq_delivery_task_dedup_key", "dedup_key", unique=True,
+        postgresql_where=dedup_key.isnot(None), sqlite_where=dedup_key.isnot(None),
+    ),)
+
+
+class CrmMessageProvider(Base):
+    __tablename__ = "crm_message_providers"
+    __table_args__ = (
+        UniqueConstraint("channel_id", name="uq_crm_provider_channel"),
+        UniqueConstraint("portal_id", "provider_code", name="uq_crm_provider_code"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    portal_id = Column(Integer, ForeignKey("portals.id"), nullable=False)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False)
+    provider_code = Column(String, nullable=False)
+    desired_state = Column(String, nullable=False, default="absent")
+    sync_state = Column(String, nullable=False, default="pending")
+    desired_revision = Column(Integer, nullable=False, default=1)
+    applied_revision = Column(Integer, nullable=False, default=0)
+    desired_name = Column(String, nullable=True)
+    desired_handler = Column(String, nullable=True)
+    last_error = Column(Text, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CrmOutgoingMessage(Base):
+    __tablename__ = "crm_outgoing_messages"
+    __table_args__ = (
+        UniqueConstraint("portal_id", "provider_code", "bitrix_message_id", name="uq_crm_outgoing_message"),
+        UniqueConstraint("channel_id", "edna_out_message_id", name="uq_crm_edna_request"),
+        Index("ix_crm_outgoing_send_state", "send_state"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    portal_id = Column(Integer, ForeignKey("portals.id"), nullable=False)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False)
+    provider_code = Column(String, nullable=False)
+    bitrix_message_id = Column(String, nullable=False)
+    bindings = Column(Text, nullable=False, default="[]")
+    actor_user_id = Column(String, nullable=True)
+    text = Column(Text, nullable=False)
+    recipient_phone = Column(String, nullable=False)
+    recipient_type = Column(String, nullable=False, default="PHONE")
+    edna_out_message_id = Column(String, nullable=False)
+    send_state = Column(String, nullable=False, default="queued")
+    attempt_started_at = Column(DateTime, nullable=True)
+    accepted_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    delivered_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
+    last_edna_status = Column(String, nullable=True)
+    last_error = Column(Text, nullable=True)
+    desired_bitrix_status = Column(String, nullable=False, default="queued")
+    desired_revision = Column(Integer, nullable=False, default=1)
+    applied_revision = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class CrmMessageStatusEvent(Base):
+    __tablename__ = "crm_message_status_events"
+    __table_args__ = (
+        UniqueConstraint("crm_message_id", "fingerprint", name="uq_crm_status_event"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    crm_message_id = Column(Integer, ForeignKey("crm_outgoing_messages.id"), nullable=False, index=True)
+    status = Column(String, nullable=False)
+    status_at = Column(DateTime, nullable=True)
+    request_id = Column(String, nullable=False)
+    error = Column(Text, nullable=True)
+    fingerprint = Column(String(64), nullable=False)
+    received_at = Column(DateTime, nullable=False, default=datetime.utcnow)
