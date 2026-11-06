@@ -175,7 +175,7 @@ SETTINGS_HTML = """<!DOCTYPE html>
   </div>
 
   <div id="main" style="display:none">
-    <div id="crmNotice" class="alert alert-info d-none"></div>
+    <div id="crmNotice" class="alert alert-warning d-none"></div>
     <div id="crmUncertain" class="alert alert-warning d-none"></div>
     <div id="paymentNotice" class="d-none mb-4" style="background:#fffbf0; border-left:3px solid #e0c060; border-radius:4px; padding:10px 16px; font-size:13px; color:#666;">
       Подписка Bitrix истекла. Канал может не работать в Открытых линиях.
@@ -353,7 +353,8 @@ function prepareCrm() {
       });
     }).catch(function(error) {
       var notice = document.getElementById('crmNotice');
-      notice.textContent = error.message;
+      crmPreparationNotice = error.message;
+      notice.textContent = crmPreparationNotice;
       notice.classList.remove('d-none');
     });
 }
@@ -373,9 +374,8 @@ function refreshCrmDiagnostics() {
 function renderCrmDiagnostics(data) {
   var notice = document.getElementById('crmNotice');
   if (data.providers && !crmPreparationNotice) {
-    var pending = data.providers.some(function(p) { return p.state === 'pending'; });
     var failed = data.providers.some(function(p) { return p.state === 'error'; });
-    notice.textContent = failed ? 'Не удалось обновить список каналов в CRM. Приложение повторит попытку; если сообщение сохраняется, обратитесь в поддержку edna.' : (pending ? 'Обновляем каналы в карточках CRM…' : '');
+    notice.textContent = failed ? 'Не удалось обновить список каналов в CRM. Если сообщение сохраняется, обратитесь в поддержку edna.' : '';
     notice.classList.toggle('d-none', !notice.textContent);
   }
   var block = document.getElementById('crmUncertain');
@@ -410,10 +410,9 @@ BX24.init(function() {
         body: JSON.stringify({member_id: memberId, domain: auth.domain})
       }).catch(function() {});
     }
-    loadChannels();
     loadOpenLines();
     loadPortalStatus();
-    prepareCrm().then(loadChannels);
+    loadChannels(prepareCrm());
   });
 });
 
@@ -428,13 +427,15 @@ function loadPortalStatus() {
     .catch(function() {});
 }
 
-function loadChannels() {
-  fetch('/api/channels?member_id=' + encodeURIComponent(memberId))
+function loadChannels(preparation) {
+  return fetch('/api/channels?member_id=' + encodeURIComponent(memberId))
     .then(function(r) { return r.json(); })
     .then(function(channels) {
-      renderChannels(channels);
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('main').style.display = '';
+      return Promise.resolve(preparation).then(function() {
+        renderChannels(channels);
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('main').style.display = '';
+      });
     })
     .catch(function(e) {
       document.getElementById('loading').innerHTML = '<p class="text-danger">Ошибка загрузки каналов</p>';
@@ -562,7 +563,8 @@ function renderChannels(channels) {
     var btn = ch.is_active
       ? '<button class="btn btn-outline-danger btn-sm" onclick="disconnect(' + ch.id + ')">Отключить</button>'
       : '';
-    if (crmAdmin) btn = '<button class="btn btn-outline-secondary btn-sm me-1" onclick="renameChannel(' + ch.id + ')">Переименовать</button>' + btn;
+    var renameDisabled = crmAdmin ? '' : ' disabled title="Для переименования нужны подтверждённые права администратора приложения"';
+    btn = '<button class="btn btn-outline-secondary btn-sm me-1"' + renameDisabled + ' onclick="renameChannel(' + ch.id + ')">Переименовать</button>' + btn;
     var hiddenAttr = idx >= 3 ? ' class="channel-hidden" style="display:none"' : '';
     rows.push('<tr' + hiddenAttr + '>' +
       '<td>' + esc(ch.name) + '</td>' +

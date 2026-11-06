@@ -70,7 +70,7 @@ async def prepare(body: PortalRequest, db: Session = Depends(get_db), authorizat
         raise HTTPException(409, "Приложение было удалено во время проверки")
     portal.crm_outreach_enabled = state == "ready"
     try:
-        stage_portal(db, portal, force=True)
+        stage_portal(db, portal, retry_failed=True)
     except CrmBitrixError:
         db.rollback()
         raise HTTPException(503, "Администратору сервера нужно проверить настройки отправки из CRM") from None

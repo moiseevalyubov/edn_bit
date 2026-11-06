@@ -41,7 +41,7 @@ def _enqueue(db, provider):
     ).on_conflict_do_nothing())
 
 
-def stage_provider(db, portal, channel, *, force=False):
+def stage_provider(db, portal, channel, *, force=False, retry_failed=False):
     """Called under portal/channel locks, in the channel mutation transaction."""
     capability = outreach_capability(channel)
     present = bool(settings.crm_outreach_enabled and portal.crm_outreach_enabled and portal.uninstalled_at is None
@@ -64,7 +64,8 @@ def stage_provider(db, portal, channel, *, force=False):
             raise CrmBitrixError("invalid_app_base_url", False)
         handler = settings.app_base_url.rstrip("/") + "/crm/messages/send"
     changed = (provider.desired_state, provider.desired_name, provider.desired_handler) != (state, name, handler)
-    if changed or (force and provider.sync_state != "pending"):
+    recover = retry_failed and provider.sync_state == "error" and provider.next_attempt_at is None
+    if changed or ((force or recover) and provider.sync_state != "pending"):
         provider.desired_state, provider.desired_name, provider.desired_handler = state, name, handler
         provider.desired_revision += 1
         provider.sync_state, provider.last_error = "pending", None
@@ -74,10 +75,10 @@ def stage_provider(db, portal, channel, *, force=False):
     return provider
 
 
-def stage_portal(db, portal, *, force=False):
+def stage_portal(db, portal, *, force=False, retry_failed=False):
     channels = db.query(Channel).filter_by(portal_id=portal.id).order_by(Channel.id).with_for_update().all()
     for channel in channels:
-        stage_provider(db, portal, channel, force=force)
+        stage_provider(db, portal, channel, force=force, retry_failed=retry_failed)
 
 
 def reconcile_local_providers(session_factory):

@@ -140,6 +140,81 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(method == "messageservice.sender.add" for method, _ in self.calls))
         self.assertEqual(self.remote[code]["DESCRIPTION"], "Отправка сообщений из CRM через edna")
 
+    async def test_reopening_ready_form_does_not_resync_providers(self):
+        await self.prepare()
+        await self.sync()
+        before = self.tasks(SYNC_CRM_PROVIDER)
+        with self.Session() as db:
+            revision = db.query(CrmMessageProvider).one().desired_revision
+        self.calls.clear()
+        result = await self.prepare()
+        self.assertTrue(result["enabled"])
+        self.assertEqual(result["providers"][0]["state"], "ready")
+        self.assertEqual(self.tasks(SYNC_CRM_PROVIDER), before)
+        with self.Session() as db:
+            self.assertEqual(db.query(CrmMessageProvider).one().desired_revision, revision)
+        self.assertFalse(await delivery_worker._process_one_task())
+        self.assertFalse(any(method.startswith("messageservice.sender.") for method, _ in self.calls))
+
+    async def test_reopening_during_retry_preserves_backoff_and_recovers_terminal_error(self):
+        await self.prepare()
+        original = self.bitrix
+        def unavailable(request):
+            if request.url.path.endswith("messageservice.sender.list"):
+                return httpx.Response(503, json={"error": "INTERNAL_SERVER_ERROR"})
+            return original(request)
+        with patch.object(self, "bitrix", side_effect=unavailable):
+            await delivery_worker._process_one_task()
+        with self.Session() as db:
+            provider = db.query(CrmMessageProvider).one()
+            revision, retry_at = provider.desired_revision, provider.next_attempt_at
+        await self.prepare()
+        with self.Session() as db:
+            provider = db.query(CrmMessageProvider).one()
+            self.assertEqual(provider.desired_revision, revision)
+            self.assertEqual(provider.next_attempt_at, retry_at)
+            provider.next_attempt_at = None
+            task = db.query(MessageDeliveryTask).filter_by(task_type=SYNC_CRM_PROVIDER).one()
+            task.status = "dead"
+            db.commit()
+        await self.prepare()
+        with self.Session() as db:
+            self.assertEqual(db.query(CrmMessageProvider).one().desired_revision, revision + 1)
+        await self.sync()
+        self.assertEqual(len(self.remote), 1)
+
+    async def test_version_one_without_messageservice_keeps_channel_management(self):
+        self.granted_scope = False
+        with self.Session() as db:
+            db.get(Portal, self.portal_id).app_token = None
+            db.commit()
+        result = await self.prepare()
+        self.assertEqual(result["state"], "scope_required")
+        with patch.object(api, "configure_incoming_webhook", AsyncMock(return_value={"subject_id": 20, "type": "MAX"})):
+            response = await self.client.post("/api/channels", headers=self.auth(), json={
+                "member_id": "test-portal", "name": "Legacy second", "api_key": "synthetic-key-2", "sender": "sender-2"})
+        self.assertEqual(response.status_code, 200, response.text)
+        response = await self.client.patch("/api/channels/" + str(self.channel_id), headers=self.auth(),
+                                          json={"member_id": "test-portal", "name": "Legacy MAX"})
+        self.assertEqual(response.status_code, 200, response.text)
+        response = await self.client.post(f"/api/channels/{self.channel_id}/disconnect?member_id=test-portal",
+                                         headers=self.auth())
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.tasks(SYNC_CRM_PROVIDER), [])
+        self.assertFalse(any(method.startswith("messageservice.") for method, _ in self.calls))
+
+    async def test_feature_disabled_keeps_legacy_endpoints_without_new_authorization(self):
+        self.granted_scope = False
+        with patch.object(settings, "crm_outreach_enabled", False), patch.object(settings, "bitrix_expected_app_code", ""):
+            response = await self.client.post("/api/crm/prepare", json={"member_id": "test-portal"})
+            self.assertEqual(response.json()["state"], "disabled")
+            response = await self.client.get("/api/channels?member_id=test-portal")
+            self.assertEqual(response.status_code, 200)
+            response = await self.client.post(f"/api/channels/{self.channel_id}/disconnect?member_id=test-portal")
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.tasks(SYNC_CRM_PROVIDER), [])
+
     async def test_multiple_channels_have_independent_codes_and_max_bot_stays_out(self):
         with self.Session() as db:
             for name, kind in (("Second MAX", "MAX"), ("Bot", "MAX_BOT"), ("Future", "WHATSAPP")):
@@ -349,7 +424,7 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
             db.query(MessageDeliveryTask).filter_by(task_type=SYNC_CRM_PROVIDER).update({"next_attempt_at": datetime.utcnow() - timedelta(seconds=1)})
             db.commit()
         await self.sync()
-        await self.prepare()  # Reopening checks remote drift by a new revision.
+        await self.prepare()  # Healthy providers remain ready without another revision.
         await self.sync()
         self.assertEqual(len(self.remote), 1)
         self.assertEqual(sum(method == "messageservice.sender.add" for method, _ in self.calls), 1)
