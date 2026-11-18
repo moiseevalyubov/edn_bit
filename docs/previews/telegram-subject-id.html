@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Настройки каналов – макет Subject ID</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --edna-font: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      --edna-text: #121212;
+      --edna-text-secondary: #5B5B5B;
+      --edna-text-tertiary: #B7B7B7;
+      --edna-divider: #ECECEC;
+      --edna-green: #09A460;
+      --edna-red: #E11900;
+      --edna-blue: #276EF1;
+      --edna-primary: #121212;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: #fff; color: var(--edna-text); font: 14px/1.5 var(--edna-font); }
+    main { max-width: 1280px; margin: 0 auto; }
+    h1 { font-size: 20px; font-weight: 600; margin: 0 0 24px; }
+    a { color: var(--edna-blue); text-underline-offset: 2px; }
+    .preview-note { color: var(--edna-blue); margin: 0 0 24px; font-size: 13px; }
+    .card { margin-bottom: 24px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,.1); overflow: hidden; }
+    .card-header { padding: 12px 16px; border-bottom: 1px solid var(--edna-divider); font-weight: 600; }
+    .card-body { padding: 16px; }
+    .muted { color: var(--edna-text-secondary); }
+    .small { font-size: 13px; }
+    p { margin: 0 0 12px; }
+    .line-status { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .badge { display: inline-block; padding: 4px 12px; border: 1px solid; border-radius: 24px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .badge-active { color: var(--edna-green); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { color: var(--edna-text-secondary); font-size: 12px; font-weight: 600; padding: 12px 16px; }
+    td { padding: 12px 16px; font-size: 13px; border-top: 1px solid var(--edna-divider); }
+    .field { margin-bottom: 20px; min-width: 0; display: flex; flex-direction: column; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+    .hint { color: var(--edna-text-secondary); font-size: 13px; margin-bottom: 8px; }
+    .hint p { margin: 0; }
+    input, select { width: 100%; padding: 8px 12px; border: 1px solid var(--edna-text); border-radius: 8px; font: 14px/1.5 var(--edna-font); background: #fff; color: var(--edna-text); }
+    input::placeholder { color: var(--edna-text-tertiary); }
+    input:focus, select:focus { outline: none; box-shadow: 0 0 0 2px rgba(18,18,18,.12); }
+    input[aria-invalid="true"] { border-color: var(--edna-red); }
+    .identifier-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 24px; }
+    .identifier-row input { margin-top: auto; }
+    button { padding: 8px 20px; border-radius: 8px; font: 600 14px/1.5 var(--edna-font); cursor: pointer; }
+    .primary { border: 1px solid var(--edna-primary); background: var(--edna-primary); color: #fff; }
+    .primary:hover { color: #d9d9d9; }
+    .secondary { border: 1px solid #fff; background: #fff; color: var(--edna-text); box-shadow: 0 1px 4px -1px rgba(18,18,18,.2); }
+    button:focus-visible, summary:focus-visible { outline: 2px solid var(--edna-blue); outline-offset: 3px; }
+    .error { color: var(--edna-red); font-size: 13px; margin-top: 8px; }
+    .notice { margin-bottom: 20px; padding: 12px 16px; border: 1px solid currentColor; border-radius: 8px; }
+    .notice.error { color: var(--edna-red); }
+    .notice.success { color: var(--edna-green); }
+    .notice.info { color: var(--edna-blue); }
+    [hidden] { display: none !important; }
+    details { border-top: 1px solid var(--edna-divider); padding-top: 16px; margin-top: 8px; }
+    summary { cursor: pointer; color: var(--edna-text-secondary); font-size: 13px; }
+    .demo-controls { padding-top: 16px; max-width: 600px; }
+    .demo-controls label { font-weight: 500; }
+    .demo-controls p { margin: 10px 0; }
+    @media (max-width: 600px) {
+      body { padding: 16px; }
+      .identifier-row { gap: 12px; }
+      .hint { overflow-wrap: anywhere; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <p class="preview-note">Макет для согласования. Все данные демонстрационные. Кнопка «Подключить» показывает выбранное состояние, запросы в edna и Битрикс24 не отправляются.</p>
+  <h1>Настройки каналов</h1>
+
+  <section class="card" aria-labelledby="line-title">
+    <div class="card-header" id="line-title">Открытая линия Битрикс24</div>
+    <div class="card-body">
+      <p class="muted small">Сообщения от клиентов будут поступать в эту открытую линию.</p>
+      <div class="line-status"><span>Поддержка клиентов</span><span class="badge badge-active">Подключена</span></div>
+    </div>
+  </section>
+
+  <section class="card table-wrap" aria-label="Подключённые каналы">
+    <table>
+      <thead><tr><th scope="col">Название</th><th scope="col">Sender ID</th><th scope="col">Тип канала</th><th scope="col">Подключён</th><th scope="col">Статус</th></tr></thead>
+      <tbody id="channels">
+        <tr><td>Продажи MAX</td><td>demo_max</td><td>MAX</td><td>19.11.2026</td><td><span class="badge badge-active">Активно</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card" aria-labelledby="form-title">
+    <div class="card-header" id="form-title">Подключить новый канал</div>
+    <div class="card-body">
+      <div id="result" class="notice" role="status" aria-live="polite" hidden></div>
+      <form id="channel-form">
+        <div class="field">
+          <label for="channel-name">Название канала</label>
+          <input id="channel-name" name="name" value="Telegram – поддержка" placeholder="Например: Продажи" maxlength="128" required>
+        </div>
+        <div class="field">
+          <label for="api-key">API-ключ (X-API-KEY)</label>
+          <div class="hint" id="api-hint">Вставьте ваш API-ключ из edna – раздел <a href="https://app.edna.ru/integration/settings" target="_blank" rel="noopener noreferrer">Интеграции → Настройки → Основной профиль ↗</a></div>
+          <input id="api-key" name="api_key" type="password" value="demo-key-not-real" placeholder="Ваш API-ключ от edna" aria-describedby="api-hint" autocomplete="off" required>
+        </div>
+        <div class="identifier-row">
+          <div class="field">
+            <label for="sender">Sender ID</label>
+            <div class="hint" id="sender-hint">Отображается в столбце «Отправитель» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener noreferrer">списке каналов edna ↗</a></div>
+            <input id="sender" name="sender" value="demo_tg" placeholder="Идентификатор канала в edna" aria-describedby="sender-hint" required>
+          </div>
+          <div class="field">
+            <label for="subject-id">Subject ID</label>
+            <div class="hint" id="subject-hint">
+              <p>Отображается в столбце «Subject ID» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener noreferrer">списке каналов edna ↗</a></p>
+              <p>Требуется только для канала Telegram.</p>
+            </div>
+            <input id="subject-id" name="subject_id" type="text" inputmode="numeric" placeholder="Введите Subject ID для Telegram" aria-describedby="subject-hint subject-error" autocomplete="off">
+            <div id="subject-error" class="error" hidden></div>
+          </div>
+        </div>
+        <button class="primary" type="submit">Подключить</button>
+      </form>
+    </div>
+  </section>
+
+  <details>
+    <summary>Проверить состояния макета</summary>
+    <div class="demo-controls">
+      <label for="scenario">Результат проверки в edna</label>
+      <select id="scenario">
+        <option value="fallback">Канал не найден в списке, настройка по Subject ID успешна</option>
+        <option value="found">Канал найден в списке – обычное подключение</option>
+        <option value="missing">Канал не найден и по Subject ID</option>
+        <option value="auth">Ошибка API-ключа</option>
+        <option value="network">Ошибка получения списка каналов</option>
+        <option value="callback">edna отклонила адрес callback</option>
+        <option value="status">Входящие настроены, webhook статусов не подтверждён</option>
+      </select>
+      <p class="muted small">Выбери состояние и нажми «Подключить». В первом сценарии введи произвольный положительный числовой Subject ID. Эти элементы нужны только для просмотра макета и не входят в рабочую форму.</p>
+      <button class="secondary" id="reset" type="button">Сбросить результат</button>
+    </div>
+  </details>
+</main>
+<script>
+  'use strict';
+  const form = document.getElementById('channel-form');
+  const subject = document.getElementById('subject-id');
+  const subjectError = document.getElementById('subject-error');
+  const result = document.getElementById('result');
+  function clearMessages() {
+    result.hidden = true;
+    subjectError.hidden = true;
+    subject.removeAttribute('aria-invalid');
+  }
+  function showResult(kind, text) {
+    result.className = 'notice ' + kind;
+    result.textContent = text;
+    result.hidden = false;
+  }
+  function fieldError(text) {
+    subjectError.textContent = text;
+    subjectError.hidden = false;
+    subject.setAttribute('aria-invalid', 'true');
+    subject.focus();
+  }
+  form.addEventListener('submit', function(event) {
+    event.preventDefault();
+    clearMessages();
+    const scenario = document.getElementById('scenario').value;
+    if (scenario === 'auth') {
+      showResult('error', 'edna не приняла API-ключ (401). Проверьте, что ключ верный и активен.');
+      return;
+    }
+    if (scenario === 'network') {
+      showResult('error', 'Не удалось получить список каналов edna. Повторите подключение позже.');
+      return;
+    }
+    if (scenario !== 'found') {
+      if (!subject.value.trim()) {
+        fieldError('Канал не найден по Sender ID. Для подключения Telegram укажите Subject ID.');
+        return;
+      }
+      if (!/^[1-9][0-9]*$/.test(subject.value.trim())) {
+        fieldError('Введите положительный числовой Subject ID.');
+        return;
+      }
+    }
+    if (scenario === 'missing') {
+      showResult('error', 'Такого канала нет в edna. Проверьте Sender ID и Subject ID');
+      return;
+    }
+    if (scenario === 'callback') {
+      showResult('error', 'edna отклонила настройку webhook (код: callback-url-malformed).');
+      return;
+    }
+    let row = document.getElementById('demo-connected');
+    if (!row) {
+      row = document.createElement('tr');
+      row.id = 'demo-connected';
+      document.getElementById('channels').appendChild(row);
+    }
+    row.replaceChildren();
+    const values = [document.getElementById('channel-name').value, document.getElementById('sender').value, 'Telegram', '19.11.2026'];
+    values.forEach(function(value) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+    const statusCell = document.createElement('td');
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-active';
+    badge.textContent = 'Активно';
+    statusCell.appendChild(badge);
+    row.appendChild(statusCell);
+    if (scenario === 'status') {
+      showResult('info', 'Канал сохранён. Входящие настроены, но webhook статусов Telegram не подтверждён. Обратитесь в поддержку edna.');
+    } else {
+      showResult('success', 'Канал подключён и настроен.');
+    }
+  });
+  subject.addEventListener('input', function() {
+    subjectError.hidden = true;
+    subject.removeAttribute('aria-invalid');
+  });
+  document.getElementById('reset').addEventListener('click', function() {
+    clearMessages();
+    const row = document.getElementById('demo-connected');
+    if (row) row.remove();
+  });
+</script>
+</body>
+</html>

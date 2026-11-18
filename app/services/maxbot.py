@@ -44,10 +44,12 @@ class WebhookSetupError(Exception):
         fatal: bool = True,
         subject_id: int | None = None,
         channel_type: str | None = None,
+        can_save_channel: bool = True,
     ):
         super().__init__(message)
         self.fatal = fatal
         self.subject_id = subject_id
+        self.can_save_channel = can_save_channel
         self.channel_type = channel_type
 
 
@@ -177,6 +179,9 @@ _INVALID_CALLBACK_CODES = {
     "url-not-specified", "subject-not-found", "error-subject-unknown",
 }
 
+_SUBJECT_NOT_FOUND_CODES = {"subject-not-found", "error-subject-unknown", "default.subject.not_found"}
+_INVALID_CALLBACK_CODES |= _SUBJECT_NOT_FOUND_CODES
+
 
 def _callback_error_code(data) -> str:
     code = data.get("code") if isinstance(data, dict) else None
@@ -220,18 +225,15 @@ async def get_channel_profiles(api_key: str, *, channel_type: str | None = None)
     return profiles
 
 
-async def _find_channel_profile(api_key: str, sender: str):
+async def _find_channel_profile(api_key: str, sender: str, manual_subject_id=None):
     channels = await get_channel_profiles(api_key)
     if not isinstance(channels, list):
         raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
     match = next((c for c in channels if isinstance(c, dict) and c.get("subject") == sender), None)
-    if match is None and settings.telegram_enabled:
-        logger.info("edna channel lookup: no exact subject in default list; requesting TELEGRAM")
-        channels = await get_channel_profiles(api_key, channel_type="TELEGRAM")
-        if not isinstance(channels, list):
-            raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
-        match = next((c for c in channels if isinstance(c, dict) and c.get("subject") == sender
-                      and c.get("type") == "TELEGRAM"), None)
+    if match is None and manual_subject_id is not None and any(
+        isinstance(c, dict) and str(c.get("subjectId")) == str(manual_subject_id) for c in channels
+    ):
+        raise WebhookSetupError("Указанный Subject ID принадлежит каналу с другим Sender ID. Проверьте оба значения.")
     logger.log(logging.INFO if match is not None else logging.WARNING,
                "edna channel lookup: exact_subject_match=%s", match is not None)
     return match
@@ -276,7 +278,7 @@ async def set_status_callback(api_key: str, subject_id: int, callback_url: str) 
 
 async def configure_incoming_webhook(
     api_key: str, sender: str, callback_url: str, status_callback_url: str | None = None,
-    *, prepare_channel=None,
+    *, prepare_channel=None, manual_subject_id: int | None = None,
 ) -> dict:
     """Найти в edna канал, у которого subject совпадает с sender, и прописать ему
     callback_url как webhook для входящих сообщений.
@@ -294,7 +296,7 @@ async def configure_incoming_webhook(
       создаётся, пользователю предлагается ручная настройка URL."""
     # --- 1) Список каналов (валидирует ключ + ищем канал по subject) ---
     try:
-        match = await _find_channel_profile(api_key, sender)
+        match = await _find_channel_profile(api_key, sender, manual_subject_id)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         if status == 401:
@@ -320,10 +322,22 @@ async def configure_incoming_webhook(
             "Попробуйте ещё раз чуть позже.",
             fatal=False,
         )
+    manual = match is None and manual_subject_id is not None
+    if manual:
+        if not settings.telegram_enabled:
+            raise WebhookSetupError("Поддержка Telegram ещё не включена администратором сервера.")
+        # TEMP: channel-profile currently omits the tested Telegram channel.
+        # The administrator supplies the pair; callback success cannot verify it.
+        # Removal conditions and limitations are documented in review.md.
+        if type(manual_subject_id) is not int or not 1 <= manual_subject_id <= 2147483647:
+            raise WebhookSetupError("Некорректный Subject ID для Telegram.")
+        match = {"subjectId": manual_subject_id, "subject": sender, "type": "TELEGRAM"}
+        logger.info("edna channel lookup: using administrator-supplied Telegram Subject ID")
     if not match:
         raise WebhookSetupError(
             "В списке каналов, доступных этому API-ключу edna, нет такого Sender ID. "
-            "Проверьте название подписи (subject), аккаунт и доступ API-ключа к каналу.",
+            "Проверьте название подписи (subject), аккаунт и доступ API-ключа к каналу."
+            + (" Для Telegram можно указать Subject ID." if settings.telegram_enabled else ""),
             fatal=True,
         )
 
@@ -343,10 +357,15 @@ async def configure_incoming_webhook(
         channel_type = "TELEGRAM"
         if not settings.telegram_enabled:
             raise WebhookSetupError("Поддержка Telegram ещё не включена администратором сервера.")
-        if match.get("active") is not True:
+        if not manual and match.get("active") is not True:
             raise WebhookSetupError("Канал Telegram не активен в edna.")
         if prepare_channel is not None:
             await prepare_channel(match)
+
+    def callback_message(code):
+        if manual and code in _SUBJECT_NOT_FOUND_CODES:
+            return "Такого канала нет в edna. Проверьте Sender ID и Subject ID"
+        return _callback_error_message(code)
 
     # --- 2) Установка callback URL ---
     try:
@@ -363,27 +382,28 @@ async def configure_incoming_webhook(
             code = "unknown"
         if code in _INVALID_CALLBACK_CODES:
             raise WebhookSetupError(
-                _callback_error_message(code), fatal=True,
+                callback_message(code), fatal=True,
                 subject_id=subject_id, channel_type=channel_type,
             ) from None
         raise WebhookSetupError(
             f"edna вернула ошибку {status} при установке webhook. Попробуйте ещё раз позже.",
-            fatal=False, subject_id=subject_id, channel_type=channel_type,
+            fatal=False, subject_id=subject_id, channel_type=channel_type, can_save_channel=not manual,
         )
     except httpx.HTTPError as e:
         raise WebhookSetupError(
             f"Не удалось связаться с edna при установке webhook ({type(e).__name__}). "
             "Попробуйте ещё раз чуть позже.",
-            fatal=False, subject_id=subject_id, channel_type=channel_type,
+            fatal=False, subject_id=subject_id, channel_type=channel_type, can_save_channel=not manual,
         )
     code = _callback_error_code(result)
     if code != "ok":
         # Invalid configuration must not create an apparently connected channel.
         # Availability failures retain the existing manual setup fallback.
         raise WebhookSetupError(
-            _callback_error_message(code),
+            callback_message(code),
             fatal=(code in _INVALID_CALLBACK_CODES),
             subject_id=subject_id, channel_type=channel_type,
+            can_save_channel=not manual,
         )
 
     # --- 3) Вебхук статусов доставки (по возможности, отдельным запросом) ---

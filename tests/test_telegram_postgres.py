@@ -10,7 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import json
 from threading import Barrier, Event
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from fastapi import HTTPException
 
 from sqlalchemy.orm import sessionmaker
 
@@ -20,6 +21,9 @@ from app.database import Base
 from app.migrations.crm_outreach_v1 import migrate_crm_outreach
 from app.models import Channel, Message, MessageDeliveryTask, Portal
 from app.services import telegram as tg, telegram_delivery as delivery, delivery_worker as worker
+from app.routers import api
+from app.schemas import ChannelCreate
+from app.services import maxbot
 
 
 @unittest.skipUnless(os.environ.get("CRM_TEST_POSTGRES_URL"), "Explicit isolated test PostgreSQL not configured")
@@ -44,6 +48,49 @@ class TelegramPostgresTests(unittest.TestCase):
 
     def tearDown(self):
         postgres_tests.PostgreSqlTests.tearDown(self)
+
+    def test_concurrent_manual_registration_does_not_replace_first_callback(self):
+        prepared = Barrier(2)
+        callback_entered, release_callback = Event(), Event()
+        callbacks = []
+
+        async def prepare(*args):
+            prepared.wait(timeout=10)
+
+        async def callback(*args):
+            callbacks.append(args)
+            callback_entered.set()
+            if not release_callback.wait(timeout=10):
+                raise AssertionError("Test did not release callback")
+            return {"code": "ok"}
+
+        def register(sender):
+            with self.Session() as db:
+                try:
+                    asyncio.run(api.create_channel(ChannelCreate(member_id="tg-test", name=sender,
+                        sender=sender, api_key="synthetic", subject_id="99"), db, None))
+                    return 200
+                except HTTPException as error:
+                    return error.status_code
+
+        with patch.object(api, "require_channel_admin", AsyncMock()), \
+             patch.object(api, "check_admin_context", AsyncMock()), \
+             patch.object(tg, "prepare_connector", prepare), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])), \
+             patch.object(maxbot, "set_in_message_callback", callback), \
+             patch.object(maxbot, "set_status_callback", AsyncMock(return_value={"code": "ok"})), \
+             ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(register, sender) for sender in ("manual-a", "manual-b")]
+            try:
+                self.assertTrue(callback_entered.wait(timeout=10))
+                self.assertEqual(len(callbacks), 1)
+            finally:
+                release_callback.set()
+            self.assertEqual(sorted(future.result(timeout=15) for future in futures), [200, 422])
+        self.assertEqual(len(callbacks), 1)
+        with self.Session() as db:
+            channel = db.query(Channel).filter_by(subject_id=99).one()
+            self.assertEqual(callbacks[0][2], settings.app_base_url + "/incoming/" + channel.webhook_token)
 
     def incoming(self):
         with self.Session() as db:

@@ -399,6 +399,118 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bitrix.call_args.args[3]["LINE"], 99)
         self.assertEqual(self.bitrix.call_args.args[3]["CONNECTOR"], tg.CONNECTOR)
 
+    async def register_new_channel(self, *, subject_id=None, profiles=None, incoming_result=None,
+                                   callback_error=None, admin_error=None, extra=None, status_result=None):
+        body = {"member_id": "test-portal", "sender": "new-tg", "name": "New Telegram", "api_key": "synthetic"}
+        if subject_id is not None:
+            body["subject_id"] = subject_id
+        body.update(extra or {})
+        with patch.object(api, "require_channel_admin", AsyncMock()), \
+             patch.object(api, "check_admin_context", AsyncMock(side_effect=admin_error, return_value=True)), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=profiles or [])) as fetch, \
+             patch.object(maxbot, "set_in_message_callback", AsyncMock(side_effect=callback_error, return_value=incoming_result or {"code": "ok"})) as callback, \
+             patch.object(maxbot, "set_status_callback", AsyncMock(return_value=status_result or {"code": "ok"})) as status_callback:
+            response = await self.client.post("/api/channels", json=body)
+        return response, fetch, callback, status_callback
+
+    async def test_manual_subject_is_persisted_with_private_callbacks_but_not_listed(self):
+        result, fetch, callback, status_callback = await self.register_new_channel(subject_id="89")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertTrue(result.json()["auto_configured"])
+        fetch.assert_awaited_once_with("synthetic")
+        with self.Session() as db:
+            channel = db.get(Channel, result.json()["channel"]["id"])
+            self.assertEqual((channel.subject_id, channel.channel_type), (89, "TELEGRAM"))
+            self.assertTrue(channel.webhook_token)
+            self.assertEqual(callback.call_args.args, ("synthetic", 89, "https://app.invalid/incoming/" + channel.webhook_token))
+            self.assertEqual(status_callback.call_args.args, ("synthetic", 89, "https://app.invalid/status/" + channel.webhook_token))
+        listed = await self.client.get("/api/channels?member_id=test-portal")
+        self.assertNotIn("subject_id", listed.text)
+        self.assertNotIn("api_key", listed.text)
+
+    async def test_empty_subject_is_optional_for_existing_max_and_maxbot_registration(self):
+        for index, (channel_type, value) in enumerate((("MAX", None), ("MAX_BOT", ""), ("MAX", "  "))):
+            sender = "legacy-" + str(index)
+            profile = [{"subject": sender, "subjectId": 90, "type": channel_type}]
+            result, fetch, callback, _ = await self.register_new_channel(
+                subject_id=value, profiles=profile, extra={"sender": sender, "name": sender})
+            self.assertEqual(result.status_code, 200, result.text)
+            self.assertEqual(result.json()["channel"]["channel_type"], channel_type)
+            fetch.assert_awaited_once_with("synthetic")
+            self.assertEqual(callback.call_args.args[1], 90)
+
+    async def test_found_profile_overrides_optional_manual_id(self):
+        profile = [{"subject": "new-tg", "subjectId": 90, "type": "MAX"}]
+        result, _, callback, _ = await self.register_new_channel(subject_id="89", profiles=profile)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["channel"]["channel_type"], "MAX")
+        self.assertEqual(callback.call_args.args[1], 90)
+
+    async def test_manual_status_failure_is_visible_without_discarding_working_incoming(self):
+        result, _, callback, statuses = await self.register_new_channel(subject_id=89, status_result={"code": "not-ready"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertTrue(result.json()["auto_configured"])
+        self.assertTrue(result.json()["setup_warnings"])
+        callback.assert_awaited_once()
+        statuses.assert_awaited_once()
+
+    async def test_manual_id_cannot_override_another_returned_channel_or_inactive_profile(self):
+        for profile in (
+            {"subject": "other-max", "subjectId": 89, "type": "MAX", "active": True},
+            {"subject": "new-tg", "subjectId": 90, "type": "TELEGRAM", "active": False},
+        ):
+            result, _, callback, _ = await self.register_new_channel(subject_id=89, profiles=[profile])
+            self.assertEqual(result.status_code, 422, result.text)
+            callback.assert_not_awaited()
+
+    async def test_missing_optional_subject_does_not_attempt_callback_for_unknown_sender(self):
+        result, _, callback, _ = await self.register_new_channel()
+        self.assertEqual(result.status_code, 422, result.text)
+        self.assertIn("Subject ID", result.text)
+        callback.assert_not_awaited()
+
+    async def test_manual_callback_unknown_subject_and_other_failure_are_distinct(self):
+        for code in ("subject-not-found", "error-subject-unknown", "callback-url-malformed"):
+            for http_status in (200, 400):
+                error = None
+                if http_status == 400:
+                    request = httpx.Request("POST", "https://app.edna.ru/api/callback/set")
+                    response = httpx.Response(400, request=request, json={"code": code})
+                    error = httpx.HTTPStatusError("rejected", request=request, response=response)
+                result, _, _, statuses = await self.register_new_channel(subject_id=89, incoming_result={"code": code}, callback_error=error)
+                self.assertEqual(result.status_code, 422, result.text)
+                if code != "callback-url-malformed":
+                    self.assertIn("Такого канала нет в edna. Проверьте Sender ID и Subject ID", result.json()["detail"])
+                else:
+                    self.assertNotIn("Такого канала нет", result.text)
+                statuses.assert_not_awaited()
+        with self.Session() as db:
+            self.assertIsNone(db.query(Channel).filter_by(sender="new-tg").first())
+
+    async def test_unconfirmed_manual_callback_does_not_save_or_claim_success(self):
+        for error in (httpx.ReadTimeout("unknown outcome"), None):
+            result, _, _, statuses = await self.register_new_channel(
+                subject_id=89, callback_error=error, incoming_result={"code": "unknown"})
+            self.assertEqual(result.status_code, 503, result.text)
+            statuses.assert_not_awaited()
+        with self.Session() as db:
+            self.assertIsNone(db.query(Channel).filter_by(sender="new-tg").first())
+
+    async def test_duplicate_subject_and_missing_authorization_cannot_replace_callbacks(self):
+        for subject_id, error in ((78, None), (89, api.CrmBitrixError("denied", False))):
+            result, _, callback, _ = await self.register_new_channel(subject_id=subject_id, admin_error=error)
+            self.assertEqual(result.status_code, 422, result.text)
+            callback.assert_not_awaited()
+
+    async def test_required_fields_and_invalid_subject_fail_before_edna_call(self):
+        cases = [{field: " "} for field in ("name", "api_key", "sender")]
+        cases += [{"subject_id": value} for value in (0, -1, True, 89.5, 89.0, "1e3", "9" * 30, [], {})]
+        for values in cases:
+            result, fetch, callback, _ = await self.register_new_channel(extra=values)
+            self.assertEqual(result.status_code, 422, result.text)
+            fetch.assert_not_awaited()
+            callback.assert_not_awaited()
+
 
 class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
     def test_access_logs_hide_path_tokens_but_keep_diagnostics(self):
@@ -417,13 +529,11 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("200", formatted)
             self.assertNotIn("synthetic-secret", formatted)
 
-    async def test_explicit_telegram_lookup_if_default_list_omits_channel(self):
+    async def test_manual_telegram_id_replaces_unsupported_type_filter(self):
         requests = []
         def remote(request):
             requests.append(request)
             profiles = [{"subject": "other-max", "subjectId": 3, "type": "MAX"}]
-            if request.url.params.get("types") == "TELEGRAM":
-                profiles = [{"subject": "synthetic-tg", "subjectId": 7, "type": "TELEGRAM", "active": True}]
             return httpx.Response(200, json=profiles)
         original_client = httpx.AsyncClient
         def client(**kwargs):
@@ -431,18 +541,18 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(settings, "telegram_enabled", True), patch.object(maxbot.httpx, "AsyncClient", client), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock(return_value={"code": "ok"})) as callback, \
              self.assertLogs(maxbot.logger, level="INFO") as logs:
-            info = await maxbot.configure_incoming_webhook("synthetic-private-key", "synthetic-tg", "https://app.invalid/incoming/synthetic-secret")
+            info = await maxbot.configure_incoming_webhook("synthetic-private-key", "synthetic-tg", "https://app.invalid/incoming/synthetic-secret", manual_subject_id=7)
         self.assertEqual(info["subject_id"], 7)
         self.assertEqual(info["type"], "TELEGRAM")
-        self.assertEqual([r.url.params.get("types") for r in requests], [None, "TELEGRAM"])
+        self.assertEqual([r.url.params.get("types") for r in requests], [None])
         callback.assert_awaited_once()
         diagnostic = " ".join(logs.output)
         self.assertIn("count=1", diagnostic)
-        self.assertIn("exact_subject_match=True", diagnostic)
+        self.assertIn("administrator-supplied", diagnostic)
         for value in ("synthetic-private-key", "synthetic-tg", "synthetic-secret", "other-max"):
             self.assertNotIn(value, diagnostic)
 
-    async def test_telegram_lookup_preserves_legacy_and_requires_exact_type_and_subject(self):
+    async def test_telegram_lookup_preserves_legacy_and_requires_exact_subject(self):
         max_profile = {"subject": "synthetic-max", "subjectId": 3, "type": "MAX"}
         for enabled in (False, True):
             with patch.object(settings, "telegram_enabled", enabled), \
@@ -453,19 +563,41 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
              patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])) as fetch:
             self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
             fetch.assert_awaited_once_with("synthetic")
-        for profiles in ([{"subject": "missing", "subjectId": 8, "type": "MAX"}],
+        for profiles in ([{"subject": "other", "subjectId": 8, "type": "MAX"}],
                          [{"subject": " missing", "subjectId": 8, "type": "TELEGRAM"}]):
             with patch.object(settings, "telegram_enabled", True), \
-                 patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=[[], profiles])):
+                 patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=profiles)) as fetch:
                 self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
+                fetch.assert_awaited_once_with("synthetic")
 
-    async def test_failed_explicit_lookup_never_configures_callback(self):
+    async def test_failed_default_lookup_never_falls_back_to_supplied_id(self):
         with patch.object(settings, "telegram_enabled", True), \
-             patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=[[], httpx.ConnectTimeout("unavailable")])), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=httpx.ConnectTimeout("unavailable"))), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
             with self.assertRaises(maxbot.WebhookSetupError) as error:
-                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/synthetic")
+                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/synthetic", manual_subject_id=7)
             self.assertFalse(error.exception.fatal)
+            callback.assert_not_awaited()
+
+    async def test_unauthorized_or_malformed_profile_never_uses_manual_id(self):
+        request = httpx.Request("GET", "https://app.edna.ru/api/channel-profile")
+        failures = [ValueError("bad JSON")]
+        for status in (400, 401, 403, 500):
+            response = httpx.Response(status, request=request)
+            failures.append(httpx.HTTPStatusError("failed", request=request, response=response))
+        for error in failures:
+            with patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=error)), \
+                 patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
+                with self.assertRaises((maxbot.WebhookSetupError, ValueError)):
+                    await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/test", manual_subject_id=7)
+                callback.assert_not_awaited()
+
+    async def test_manual_telegram_cannot_bypass_disabled_flag(self):
+        with patch.object(settings, "telegram_enabled", False), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])), \
+             patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
+            with self.assertRaises(maxbot.WebhookSetupError):
+                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/test", manual_subject_id=7)
             callback.assert_not_awaited()
 
     def test_safe_traceback_does_not_dump_sql_or_http_credentials(self):

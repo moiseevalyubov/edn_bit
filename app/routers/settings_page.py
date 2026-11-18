@@ -112,6 +112,10 @@ SETTINGS_HTML = """<!DOCTYPE html>
       box-shadow: 0 0 0 2px rgba(18,18,18,.12);  /* нейтральная подсветка вместо синей Bootstrap */
     }
     .form-label { font-weight: 600; font-size: 13px; color: var(--edna-text); }
+    .channel-identifiers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+    .channel-identifier { display: flex; flex-direction: column; min-width: 0; }
+    .channel-identifier .form-control { margin-top: auto; }
+    @media (max-width: 600px) { .channel-identifiers { gap: 12px; } }
 
     /* ---- Блок помощи: плитки edna (зелёный акцент Positive500) ---- */
     .help-block {
@@ -258,19 +262,27 @@ SETTINGS_HTML = """<!DOCTYPE html>
         <div id="formError" class="alert alert-danger d-none"></div>
         <div class="mb-3">
           <label class="form-label">Название канала</label>
-          <input type="text" class="form-control" id="channelName" placeholder="Например: Продажи">
+          <input type="text" class="form-control" id="channelName" placeholder="Например: Продажи" required>
           <div id="nameError" class="text-danger small mt-1 d-none"></div>
         </div>
         <div class="mb-3">
           <label class="form-label">API-ключ (X-API-KEY)</label>
           <div class="form-text mb-2">Вставьте ваш API-ключ из edna - раздел <a href="https://app.edna.ru/integration/settings" target="_blank" rel="noopener">Интеграции → Настройки → Основной профиль ↗</a></div>
-          <input type="text" class="form-control" id="apiKey" placeholder="Ваш API-ключ от edna">
+          <input type="text" class="form-control" id="apiKey" placeholder="Ваш API-ключ от edna" required>
         </div>
-        <div class="mb-3">
-          <label class="form-label">Sender ID</label>
+        <div class="channel-identifiers mb-3">
+        <div class="channel-identifier">
+          <label class="form-label" for="sender">Sender ID</label>
           <div class="form-text mb-2">Отображается в столбце «Отправитель» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener">списке каналов edna ↗</a></div>
-          <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала в edna">
+          <input type="text" class="form-control" id="sender" placeholder="Идентификатор канала в edna" required>
           <div id="senderError" class="text-danger small mt-1 d-none"></div>
+        </div>
+        <div class="channel-identifier">
+          <label class="form-label" for="subjectId">Subject ID</label>
+          <div class="form-text mb-2" id="subjectIdHint">Отображается в столбце «Subject ID» в <a href="https://app.edna.ru/channels/tabs/list" target="_blank" rel="noopener">списке каналов edna ↗</a><br>Требуется только для канала Telegram.</div>
+          <input type="text" inputmode="numeric" class="form-control" id="subjectId" placeholder="Введите Subject ID для Telegram" aria-describedby="subjectIdHint subjectIdError" autocomplete="off">
+          <div id="subjectIdError" class="text-danger small mt-1 d-none"></div>
+        </div>
         </div>
         <button class="btn btn-primary" id="saveBtn" onclick="saveChannel()">
           <span id="saveBtnText">Подключить</span>
@@ -610,22 +622,30 @@ function saveChannel() {
   var name = document.getElementById('channelName').value.trim();
   var apiKey = document.getElementById('apiKey').value.trim();
   var sender = document.getElementById('sender').value.trim();
+  var subjectId = document.getElementById('subjectId').value.trim();
 
   clearFieldErrors();
   document.getElementById('formError').classList.add('d-none');
   document.getElementById('webhookBlock').classList.add('d-none');
 
   if (!name || !apiKey || !sender) {
-    showFormError('Заполните все поля');
+    showFormError('Заполните название канала, API-ключ и Sender ID');
     return;
   }
+
+  if (subjectId && (!/^[1-9][0-9]{0,9}$/.test(subjectId) || (subjectId.length === 10 && subjectId > '2147483647'))) {
+    showFieldError('subjectIdError', 'Subject ID должен быть целым числом от 1 до 2147483647');
+    return;
+  }
+  var payload = {member_id: memberId, name: name, api_key: apiKey, sender: sender};
+  if (subjectId) payload.subject_id = subjectId; // Empty is omitted; never round identifiers with Number().
 
   setLoading(true);
 
   fetch('/api/channels', {
     method: 'POST',
     headers: appHeaders(),
-    body: JSON.stringify({member_id: memberId, name: name, api_key: apiKey, sender: sender})
+    body: JSON.stringify(payload)
   })
   .then(function(r) {
     return r.json().then(function(data) {
@@ -633,7 +653,11 @@ function saveChannel() {
         setLoading(false);
         var detail = data.detail;
         if (detail && typeof detail === 'object' && detail.field) {
-          showFieldError(detail.field === 'sender' ? 'senderError' : 'nameError', detail.message);
+          var fieldErrors = {sender: 'senderError', name: 'nameError', subject_id: 'subjectIdError'};
+          if (fieldErrors[detail.field]) showFieldError(fieldErrors[detail.field], detail.message);
+          else showFormError(detail.message || 'Ошибка сохранения');
+        } else if (Array.isArray(detail) && detail.some(function(item) { return item.loc && item.loc.indexOf('subject_id') !== -1; })) {
+          showFieldError('subjectIdError', 'Subject ID должен быть целым числом от 1 до 2147483647');
         } else {
           showFormError(typeof detail === 'string' ? detail : 'Ошибка сохранения');
         }
@@ -643,6 +667,7 @@ function saveChannel() {
       document.getElementById('channelName').value = '';
       document.getElementById('apiKey').value = '';
       document.getElementById('sender').value = '';
+      document.getElementById('subjectId').value = '';
       showWebhookResult(data);
       loadChannels();
       if (crmAvailable) refreshCrmDiagnostics();
@@ -756,7 +781,7 @@ function showFieldError(elId, msg) {
 }
 
 function clearFieldErrors() {
-  ['nameError', 'senderError'].forEach(function(id) {
+  ['nameError', 'senderError', 'subjectIdError'].forEach(function(id) {
     var el = document.getElementById(id);
     el.textContent = '';
     el.classList.add('d-none');

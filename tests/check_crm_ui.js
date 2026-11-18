@@ -105,6 +105,42 @@ async function main() {
   assert.equal(document.getElementById('channelSetupWarnings').textContent, 'Select the common Open Line');
   context.showWebhookResult({auto_configured: true, webhook_url: 'https://app.invalid/incoming/test'});
   assert.equal(document.getElementById('channelSetupWarnings').textContent, '', 'A later healthy setup clears the warning');
-  console.log('CRM UI checks passed: silent background sync, visible errors, single initial render, authorization, rename');
+  // Subject ID is optional: all three legacy fields are sufficient to submit.
+  calls.length = 0;
+  function fillChannel(subject) {
+    document.getElementById('channelName').value = 'Test channel';
+    document.getElementById('apiKey').value = 'synthetic-key';
+    document.getElementById('sender').value = 'test-sender';
+    document.getElementById('subjectId').value = subject;
+  }
+  context.fetch = (url, options) => {
+    calls.push({url, options});
+    return Promise.resolve({ok: true, json: () => Promise.resolve({auto_configured: true, webhook_url: 'https://app.invalid/incoming/test'})});
+  };
+  fillChannel('');
+  context.saveChannel();
+  assert.equal(calls.length, 1);
+  assert.ok(!Object.hasOwn(JSON.parse(calls[0].options.body), 'subject_id'));
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  fillChannel('2147483647');
+  context.saveChannel();
+  assert.equal(JSON.parse(calls[1].options.body).subject_id, '2147483647');
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(document.getElementById('subjectId').value, '', 'Success clears the optional ID');
+  const requestCount = calls.length;
+  for (const value of ['0', '1.5', 'true', '2147483648', '99999999999999999999']) {
+    fillChannel(value);
+    context.saveChannel();
+    assert.equal(calls.length, requestCount);
+    assert.ok(document.getElementById('subjectIdError').textContent.includes('Subject ID'));
+  }
+  for (const field of ['channelName', 'apiKey', 'sender']) {
+    fillChannel('');
+    document.getElementById(field).value = ' ';
+    context.saveChannel();
+    assert.equal(calls.length, requestCount, 'Each legacy field remains required');
+  }
+  assert.ok(!/<input[^>]*id="subjectId"[^>]*\brequired\b/.test(source));
+  console.log('CRM and Telegram UI checks passed, including optional Subject ID and required legacy fields');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

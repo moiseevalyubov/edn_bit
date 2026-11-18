@@ -102,7 +102,19 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
             await telegram.prepare_connector(portal, db)
         except (telegram.TelegramError, CrmBitrixError):
             raise WebhookSetupError("Не удалось подготовить коннектор Telegram. Проверьте авторизацию и общую Открытую линию приложения.") from None
+        # Token refresh during preparation can commit. Lock AFTER it, before
+        # touching edna callbacks, and hold the lock until Channel is committed.
+        db.refresh(portal, with_for_update=True)
+        if portal.uninstalled_at is not None:
+            raise WebhookSetupError("Приложение было удалено во время подключения")
+        if db.query(Channel).filter(
+            Channel.portal_id == portal.id, Channel.is_active.is_(True),
+            (Channel.subject_id == profile.get("subjectId")) | (Channel.sender == body.sender),
+        ).first():
+            raise WebhookSetupError("Канал с таким Sender ID или Subject ID уже подключён к этому порталу")
     options = {"prepare_channel": prepare_new_type} if settings.telegram_enabled else {}
+    if body.subject_id is not None:
+        options["manual_subject_id"] = body.subject_id
     try:
         info = await configure_incoming_webhook(
             body.api_key, body.sender, webhook_url, status_url, **options
@@ -119,6 +131,9 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
         if e.fatal:
             logger.info("Channel (sender=%s): auto webhook setup blocked creation: %s", body.sender, e)
             raise HTTPException(status_code=422, detail=f"Автоматическая настройка не удалась: {e}")
+        if not e.can_save_channel:
+            logger.warning("Telegram callback setup not confirmed; channel was not saved")
+            raise HTTPException(status_code=503, detail=str(e))
         # Keep whatever the failed attempt already learned: the channel type decides
         # which edna endpoint replies go to, and guessing it later is worse than
         # having no webhook (which the user can still set manually).
