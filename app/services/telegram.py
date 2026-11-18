@@ -9,8 +9,14 @@ import httpx
 
 from app.config import settings
 from app.services.token import get_valid_token
+from app.services.log_paths import payload_for_log
 
 logger = logging.getLogger(__name__)
+
+
+def log_payload(direction, data, channel_id=None):
+    logger.info("Telegram %s payload (channel=%s): %s", direction, channel_id, payload_for_log(data))
+
 CONNECTOR = "edna_telegram"
 API_URL = "https://app.edna.ru/api/v1/out-messages/telegram"
 RECEIVE = "telegram_receive"
@@ -164,12 +170,12 @@ async def send_text(api_key, sender, address, text, out_message_id):
     telegram_id(address)
     if not isinstance(text, str) or not text.strip():
         raise TelegramError("empty_text")
+    payload = {"from": sender, "to": {"type": "TELEGRAM_ID", "value": address},
+               "outMessageId": out_message_id, "content": {"type": "TEXT", "text": text}}
+    log_payload("outgoing request", payload)
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(API_URL, headers={"X-API-KEY": api_key}, json={
-                "from": sender, "to": {"type": "TELEGRAM_ID", "value": address},
-                "outMessageId": out_message_id, "content": {"type": "TEXT", "text": text},
-            }, timeout=15)
+            response = await client.post(API_URL, headers={"X-API-KEY": api_key}, json=payload, timeout=15)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
         raise TelegramError("edna_not_connected", retryable=True) from None
     except httpx.HTTPError:
@@ -184,6 +190,7 @@ async def send_text(api_key, sender, address, text, out_message_id):
         raise TelegramError("edna_send_rejected")
     try:
         result = response.json()
+        log_payload("outgoing response", result)
     except ValueError:
         raise TelegramError("edna_invalid_response", uncertain=True) from None
     if not isinstance(result, dict) or result.get("outMessageId") != out_message_id:

@@ -161,6 +161,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             data = json.loads(body)
             if not isinstance(data, dict):
                 raise telegram.TelegramError("invalid_payload")
+            telegram.log_payload("incoming", data, channel.id)
             accept_telegram_incoming(db, channel, data)
         except telegram.TelegramError as exc:
             db.rollback()

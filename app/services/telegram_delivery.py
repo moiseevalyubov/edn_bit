@@ -79,6 +79,7 @@ def accept_incoming(db, channel, data):
     previous = db.query(Message).filter_by(channel_id=channel.id, direction="incoming",
                                           subscriber_identifier=address).order_by(Message.id.desc()).first()
     name = sanitize_name(user.get("firstName") or user.get("displayName") or user.get("userName"))
+    name_source = "userInfo" if name else "history" if previous and previous.user_name else "identifier"
     name = name or (previous.user_name if previous else None) or ("Telegram " + address)
     last_name = sanitize_name(user.get("lastName")) or (previous.user_last_name if previous else None)
     name = name.replace("[", "［").replace("]", "］")
@@ -100,7 +101,10 @@ def accept_incoming(db, channel, data):
     db.add(message)
     db.flush()
     _task(db, channel.id, tg.RECEIVE, key, {"message_id": message.id, "phone": phone})
+    saved_channel_id, saved_message_id = channel.id, message.id
     _commit(db)
+    logger.info("Telegram incoming saved: channel=%s message_id=%s external_id=%s name_source=%s",
+                saved_channel_id, saved_message_id, msg_id, name_source)
 
 
 def accept_outgoing(db, portal, data):
@@ -175,14 +179,19 @@ def accept_status(db, channel, data):
     request_id = tg.scalar(data.get("requestId"))
     status = tg.scalar(data.get("status")).upper()
     if status not in {"SENT", "DELIVERED", "READ", *tg.FAILURES}:
+        logger.info("Telegram status ignored: channel=%s request_id=%s status=%s", channel.id, request_id, status)
         return
     message = db.query(Message).filter_by(channel_id=channel.id, direction="outgoing", edna_request_id=request_id).first()
     if message is None:
+        logger.warning("Telegram status not matched: channel=%s request_id=%s status=%s", channel.id, request_id, status)
         raise tg.TelegramError("telegram_request_unknown", retryable=True)
     key = "tg:status:%s:%s" % (message.id, status)
     _task(db, channel.id, tg.STATUS, key,
           {"message_id": message.id, "status": status})
+    saved_channel_id, saved_message_id = channel.id, message.id
     _commit(db)
+    logger.info("Telegram status saved: channel=%s message_id=%s request_id=%s status=%s",
+                saved_channel_id, saved_message_id, request_id, status)
 
 
 def enqueue_notice(db, message, reason):
@@ -293,6 +302,8 @@ async def execute_task(task_id, session_factory):
                                     "chat": {"id": tg.chat_id(channel, message.subscriber_identifier)},
                                 }],
                             })
+                            logger.info("Telegram READ forwarded to Bitrix: channel=%s message_id=%s request_id=%s",
+                                        channel.id, message.id, message.edna_request_id)
                         elif status in tg.FAILURES:
                             enqueue_notice(db, message, "failed")
                         current["delivery_status"] = status

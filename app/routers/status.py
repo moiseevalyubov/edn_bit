@@ -89,6 +89,7 @@ async def status_callback(webhook_token: str, request: Request, db: Session = De
         return _ok()
 
     if telegram.is_telegram(channel):
+        telegram.log_payload("status", data, channel.id)
         try:
             accept_telegram_status(db, channel, data)
         except telegram.TelegramError as exc:

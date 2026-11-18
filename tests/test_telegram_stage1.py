@@ -134,6 +134,47 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post("/incoming/wrong", json=self.payload())).status_code, 403)
         self.assertEqual(self.rows(tg.RECEIVE), [])
 
+    async def test_incoming_diagnostics_include_text_name_fields_but_no_credentials(self):
+        data = self.payload()
+        data["api_key"] = "synthetic-private-key"
+        with self.assertLogs("app", level="INFO") as logs:
+            response = await self.client.post("/incoming/tg-token", json=data)
+        self.assertEqual(response.status_code, 200)
+        diagnostic = " ".join(logs.output)
+        for value in ('Telegram incoming payload', 'userInfo', 'firstName', 'Hello', 'name_source=userInfo'):
+            self.assertIn(value, diagnostic)
+        self.assertNotIn("synthetic-private-key", diagnostic)
+        data["id"] = "102"
+        data["userInfo"] = None
+        data["subscriber"]["identifiers"][0]["value"] = "456"
+        with self.assertLogs("app", level="INFO") as logs:
+            response = await self.client.post("/incoming/tg-token", json=data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"userInfo":null', " ".join(logs.output))
+        self.assertIn('name_source=identifier', " ".join(logs.output))
+
+    async def test_status_diagnostics_identify_read_and_do_not_mark_sent_as_read(self):
+        await self.send_queued()
+        with patch.object(tg, "send_text", AsyncMock()):
+            await worker._process_one_task()
+        with self.Session() as db:
+            request_id = db.query(Message).filter_by(direction="outgoing").one().edna_request_id
+        self.bitrix.reset_mock()
+        for state in ("SENT", "DELIVERED", "READ"):
+            with self.assertLogs("app", level="INFO") as logs:
+                response = await self.client.post("/status/tg-token", json={"requestId": request_id, "status": state})
+                await worker._process_one_task()
+            self.assertEqual(response.status_code, 200)
+            diagnostic = " ".join(logs.output)
+            self.assertIn("Telegram status payload", diagnostic)
+            self.assertIn("status=" + state, diagnostic)
+            self.assertIn(request_id, diagnostic)
+            if state == "READ":
+                self.assertIn("Telegram READ forwarded to Bitrix", diagnostic)
+                self.assertEqual(self.bitrix.call_args.args[2], "imconnector.send.status.delivery")
+            else:
+                self.bitrix.assert_not_awaited()
+
     async def test_flag_off_no_new_work_and_no_telegram_crm_provider(self):
         with patch.object(settings, "telegram_enabled", False):
             self.assertFalse(Settings(_env_file=None).telegram_enabled)
@@ -572,21 +613,39 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
                     with self.assertRaises(tg.TelegramError):
                         await tg.bitrix_call(portal, None, method, {})
 
-    def test_access_logs_hide_path_tokens_but_keep_diagnostics(self):
+    def test_access_logs_restore_webhook_paths_and_keep_file_links_private(self):
         import logging
         from uvicorn.logging import AccessFormatter
         from app.services.log_paths import PrivatePathFilter, public_path
         for path in ("/incoming/synthetic-secret", "/status/synthetic-secret", "/file/file.pdf?token=synthetic-secret&expires=123"):
-            self.assertNotIn("synthetic-secret", public_path(path))
+            hidden_file = path.startswith('/file/')
+            self.assertEqual("synthetic-secret" not in public_path(path), hidden_file)
             record = logging.LogRecord("uvicorn.access", logging.INFO, "", 0, '%s - "%s %s HTTP/%s" %s',
                                        ("client", "POST", path, "1.1", 200), None)
             PrivatePathFilter().filter(record)
-            self.assertNotIn("synthetic-secret", record.getMessage())
+            self.assertEqual("synthetic-secret" not in record.getMessage(), hidden_file)
             self.assertIn("200", record.getMessage())
             formatted = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
             self.assertIn("POST", formatted)
             self.assertIn("200", formatted)
-            self.assertNotIn("synthetic-secret", formatted)
+            self.assertEqual("synthetic-secret" not in formatted, hidden_file)
+
+    def test_payload_diagnostics_preserve_json_and_redact_nested_credentials(self):
+        from app.services.log_paths import payload_for_log
+        payload = {"userInfo": {"firstName": "Test", "lastName": "User"}, "messageContent": {"text": "Hello\nWorld"},
+                   "subscriber": {"identifiers": [{"type": "TELEGRAM_ID", "value": "123"}]},
+                   "nested": [{"X-API-KEY": "private-api", "access_token": "private-oauth", "auth": {"secret": "private-auth"}}],
+                   "url": "https://example.invalid/?access_token=private-query&message=keep"}
+        encoded = payload_for_log(payload)
+        result = json.loads(encoded)
+        self.assertEqual(result['userInfo'], payload['userInfo'])
+        self.assertEqual(result['messageContent'], payload['messageContent'])
+        self.assertEqual(result['subscriber'], payload['subscriber'])
+        self.assertNotIn('\n', encoded)
+        for value in ('private-api', 'private-oauth', 'private-auth', 'private-query'):
+            self.assertNotIn(value, encoded)
+        self.assertIn('message=keep', encoded)
+        self.assertEqual(payload['nested'][0]['X-API-KEY'], 'private-api', 'Logging must not modify request data')
 
     async def test_manual_telegram_id_replaces_unsupported_type_filter(self):
         requests = []
