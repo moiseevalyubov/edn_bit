@@ -403,6 +403,7 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
 class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
     def test_access_logs_hide_path_tokens_but_keep_diagnostics(self):
         import logging
+        from uvicorn.logging import AccessFormatter
         from app.services.log_paths import PrivatePathFilter, public_path
         for path in ("/incoming/synthetic-secret", "/status/synthetic-secret", "/file/file.pdf?token=synthetic-secret&expires=123"):
             self.assertNotIn("synthetic-secret", public_path(path))
@@ -411,6 +412,61 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
             PrivatePathFilter().filter(record)
             self.assertNotIn("synthetic-secret", record.getMessage())
             self.assertIn("200", record.getMessage())
+            formatted = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False).format(record)
+            self.assertIn("POST", formatted)
+            self.assertIn("200", formatted)
+            self.assertNotIn("synthetic-secret", formatted)
+
+    async def test_explicit_telegram_lookup_if_default_list_omits_channel(self):
+        requests = []
+        def remote(request):
+            requests.append(request)
+            profiles = [{"subject": "other-max", "subjectId": 3, "type": "MAX"}]
+            if request.url.params.get("types") == "TELEGRAM":
+                profiles = [{"subject": "synthetic-tg", "subjectId": 7, "type": "TELEGRAM", "active": True}]
+            return httpx.Response(200, json=profiles)
+        original_client = httpx.AsyncClient
+        def client(**kwargs):
+            return original_client(transport=httpx.MockTransport(remote), **kwargs)
+        with patch.object(settings, "telegram_enabled", True), patch.object(maxbot.httpx, "AsyncClient", client), \
+             patch.object(maxbot, "set_in_message_callback", AsyncMock(return_value={"code": "ok"})) as callback, \
+             self.assertLogs(maxbot.logger, level="INFO") as logs:
+            info = await maxbot.configure_incoming_webhook("synthetic-private-key", "synthetic-tg", "https://app.invalid/incoming/synthetic-secret")
+        self.assertEqual(info["subject_id"], 7)
+        self.assertEqual(info["type"], "TELEGRAM")
+        self.assertEqual([r.url.params.get("types") for r in requests], [None, "TELEGRAM"])
+        callback.assert_awaited_once()
+        diagnostic = " ".join(logs.output)
+        self.assertIn("count=1", diagnostic)
+        self.assertIn("exact_subject_match=True", diagnostic)
+        for value in ("synthetic-private-key", "synthetic-tg", "synthetic-secret", "other-max"):
+            self.assertNotIn(value, diagnostic)
+
+    async def test_telegram_lookup_preserves_legacy_and_requires_exact_type_and_subject(self):
+        max_profile = {"subject": "synthetic-max", "subjectId": 3, "type": "MAX"}
+        for enabled in (False, True):
+            with patch.object(settings, "telegram_enabled", enabled), \
+                 patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[max_profile])) as fetch:
+                self.assertEqual(await maxbot._find_channel_profile("synthetic", "synthetic-max"), max_profile)
+                fetch.assert_awaited_once_with("synthetic")
+        with patch.object(settings, "telegram_enabled", False), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])) as fetch:
+            self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
+            fetch.assert_awaited_once_with("synthetic")
+        for profiles in ([{"subject": "missing", "subjectId": 8, "type": "MAX"}],
+                         [{"subject": " missing", "subjectId": 8, "type": "TELEGRAM"}]):
+            with patch.object(settings, "telegram_enabled", True), \
+                 patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=[[], profiles])):
+                self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
+
+    async def test_failed_explicit_lookup_never_configures_callback(self):
+        with patch.object(settings, "telegram_enabled", True), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=[[], httpx.ConnectTimeout("unavailable")])), \
+             patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
+            with self.assertRaises(maxbot.WebhookSetupError) as error:
+                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/synthetic")
+            self.assertFalse(error.exception.fatal)
+            callback.assert_not_awaited()
 
     def test_safe_traceback_does_not_dump_sql_or_http_credentials(self):
         private_value = "synthetic-private-token-in-sql-params"

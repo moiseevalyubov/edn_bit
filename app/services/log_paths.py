@@ -9,6 +9,14 @@ def public_path(value):
 
 class PrivatePathFilter(logging.Filter):
     def filter(self, record):
-        record.msg = public_path(record.getMessage())
-        record.args = ()
+        # Uvicorn's AccessFormatter unpacks the original five arguments.
+        # Mask strings without flattening the record into a formatted message.
+        if isinstance(record.msg, str):
+            record.msg = public_path(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(public_path(value) if isinstance(value, str) else value
+                                for value in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {key: public_path(value) if isinstance(value, str) else value
+                           for key, value in record.args.items()}
         return True

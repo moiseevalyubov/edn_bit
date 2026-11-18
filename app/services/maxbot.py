@@ -187,21 +187,54 @@ def _callback_error_message(code) -> str:
     return _CALLBACK_ERROR_MESSAGES.get(code, f"edna отклонила настройку webhook (код: {code}).")
 
 
-async def get_channel_profiles(api_key: str) -> list:
+async def get_channel_profiles(api_key: str, *, channel_type: str | None = None) -> list:
     """GET /api/channel-profile — список всех каналов для этого API-ключа.
 
     Возвращает массив объектов канала (поля subject, subjectId, type, active и т.д.).
-    Фильтр types не передаём — нужны все каналы, чтобы найти наш по subject."""
+    По умолчанию сохраняем прежний запрос без фильтра. Для нового канала можно
+    дополнительно запросить явный types, если общий список его не содержит."""
+    options = {"params": {"types": channel_type}} if channel_type else {}
     async with httpx.AsyncClient() as client:
         response = await client.get(
             f"{EDNA_API_BASE}/channel-profile",
             headers={"X-API-KEY": api_key},
             timeout=10,
+            **options,
         )
     if not response.is_success:
-        logger.error("edna channel-profile error %s: %s", response.status_code, response.text[:500])
+        logger.error("edna channel-profile failed: HTTP=%s, filter=%s",
+                     response.status_code, channel_type or "default")
     response.raise_for_status()
-    return response.json()
+    profiles = response.json()
+    if not isinstance(profiles, list):
+        logger.warning("edna channel-profile unexpected response: filter=%s", channel_type or "default")
+        raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
+    # Never log keys, subjects (may contain phone numbers), or the raw response.
+    types = {}
+    for profile in profiles:
+        value = profile.get("type") if isinstance(profile, dict) else None
+        label = value if isinstance(value, str) and re.fullmatch(r"[A-Z_]{1,32}", value) else "unknown"
+        types[label] = types.get(label, 0) + 1
+    logger.info("edna channel-profile: filter=%s, count=%s, types=%s",
+                channel_type or "default", len(profiles), types)
+    return profiles
+
+
+async def _find_channel_profile(api_key: str, sender: str):
+    channels = await get_channel_profiles(api_key)
+    if not isinstance(channels, list):
+        raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
+    match = next((c for c in channels if isinstance(c, dict) and c.get("subject") == sender), None)
+    if match is None and settings.telegram_enabled:
+        logger.info("edna channel lookup: no exact subject in default list; requesting TELEGRAM")
+        channels = await get_channel_profiles(api_key, channel_type="TELEGRAM")
+        if not isinstance(channels, list):
+            raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
+        match = next((c for c in channels if isinstance(c, dict) and c.get("subject") == sender
+                      and c.get("type") == "TELEGRAM"), None)
+    logger.log(logging.INFO if match is not None else logging.WARNING,
+               "edna channel lookup: exact_subject_match=%s", match is not None)
+    return match
 
 
 async def _set_callback(api_key: str, subject_id: int, field: str, callback_url: str) -> dict:
@@ -261,7 +294,7 @@ async def configure_incoming_webhook(
       создаётся, пользователю предлагается ручная настройка URL."""
     # --- 1) Список каналов (валидирует ключ + ищем канал по subject) ---
     try:
-        channels = await get_channel_profiles(api_key)
+        match = await _find_channel_profile(api_key, sender)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
         if status == 401:
@@ -287,17 +320,10 @@ async def configure_incoming_webhook(
             "Попробуйте ещё раз чуть позже.",
             fatal=False,
         )
-    if not isinstance(channels, list):
-        raise WebhookSetupError("Неожиданный ответ от edna при получении списка каналов.", fatal=False)
-
-    match = next(
-        (c for c in channels if isinstance(c, dict) and c.get("subject") == sender),
-        None,
-    )
     if not match:
         raise WebhookSetupError(
-            "В edna не найден канал с таким Sender ID. Проверьте, что Sender ID точно "
-            "совпадает с названием подписи (subject) в личном кабинете edna.",
+            "В списке каналов, доступных этому API-ключу edna, нет такого Sender ID. "
+            "Проверьте название подписи (subject), аккаунт и доступ API-ключа к каналу.",
             fatal=True,
         )
 
