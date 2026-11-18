@@ -40,6 +40,7 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.worker_db.start()
         self.addCleanup(self.worker_db.stop)
         self.bitrix = AsyncMock(return_value={"SUCCESS": True})
+        self.actual_bitrix_call = tg.bitrix_call
         self.bitrix_patch = patch.object(tg, "bitrix_call", self.bitrix)
         self.bitrix_patch.start()
         self.addCleanup(self.bitrix_patch.stop)
@@ -428,6 +429,37 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("subject_id", listed.text)
         self.assertNotIn("api_key", listed.text)
 
+    async def test_manual_registration_accepts_documented_bitrix_registration_envelope(self):
+        methods = []
+        def remote(request):
+            methods.append(request.url.path.rsplit("/", 1)[-1])
+            payload = {"result": {"result": True}} if methods[-1] == "imconnector.register" else {"result": True}
+            return httpx.Response(200, json=payload)
+        original_client = httpx.AsyncClient
+        def client(**kwargs):
+            return original_client(transport=httpx.MockTransport(remote), **kwargs)
+        with patch.object(tg, "bitrix_call", self.actual_bitrix_call), \
+             patch.object(tg.httpx, "AsyncClient", client):
+            result, _, callback, _ = await self.register_new_channel(subject_id="89")
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(methods, ["imconnector.register", "imconnector.activate"])
+        callback.assert_awaited_once()
+
+    async def test_registration_failure_reports_safe_method_and_code_without_callback_changes(self):
+        original_client = httpx.AsyncClient
+        def client(**kwargs):
+            return original_client(transport=httpx.MockTransport(lambda request: httpx.Response(200, json={
+                "result": {"result": False, "error": "ICON_REQUIRED", "error_description": "synthetic-private-description"}
+            })), **kwargs)
+        with patch.object(tg, "bitrix_call", self.actual_bitrix_call), \
+             patch.object(tg.httpx, "AsyncClient", client), self.assertLogs("app", level="INFO") as logs:
+            result, _, callback, _ = await self.register_new_channel(subject_id="89")
+        self.assertEqual(result.status_code, 422)
+        self.assertIn("imconnector.register", result.json()["detail"])
+        self.assertIn("ICON_REQUIRED", result.json()["detail"])
+        self.assertNotIn("synthetic-private-description", result.text + " ".join(logs.output))
+        callback.assert_not_awaited()
+
     async def test_empty_subject_is_optional_for_existing_max_and_maxbot_registration(self):
         for index, (channel_type, value) in enumerate((("MAX", None), ("MAX_BOT", ""), ("MAX", "  "))):
             sender = "legacy-" + str(index)
@@ -513,6 +545,33 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
 
 
 class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bitrix_setup_accepts_only_explicit_success_in_method_specific_envelope(self):
+        from types import SimpleNamespace
+        portal = SimpleNamespace(client_endpoint="https://portal.invalid/rest/")
+        cases = [
+            ("imconnector.register", {"result": {"result": True}}, True),
+            ("imconnector.register", {"result": True}, True),
+            ("imconnector.activate", {"result": True}, True),
+            ("imconnector.register", {"result": {"result": False, "error": "ICON_REQUIRED"}}, False),
+            ("imconnector.register", {"result": {"result": True, "error": "NO_APPLICATION_ID"}}, False),
+            ("imconnector.register", {"result": {"result": 1}}, False),
+            ("imconnector.register", {"result": {"result": "true"}}, False),
+            ("imconnector.register", {"result": {"SUCCESS": True}}, False),
+            ("imconnector.register", {"result": False}, False),
+            ("imconnector.activate", {"result": {"result": True}}, False),
+            ("imconnector.activate", {"result": False}, False),
+            ("imconnector.activate", {"result": True, "error": "ERROR_ARGUMENT"}, False),
+        ]
+        for method, payload, success in cases:
+            client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)))
+            with patch.object(tg.httpx, "AsyncClient", return_value=client), \
+                 patch.object(tg, "get_valid_token", AsyncMock(return_value="synthetic")):
+                if success:
+                    self.assertIs(await tg.bitrix_call(portal, None, method, {}), True)
+                else:
+                    with self.assertRaises(tg.TelegramError):
+                        await tg.bitrix_call(portal, None, method, {})
+
     def test_access_logs_hide_path_tokens_but_keep_diagnostics(self):
         import logging
         from uvicorn.logging import AccessFormatter

@@ -100,8 +100,15 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
         try:
             await check_admin_context(portal, db)
             await telegram.prepare_connector(portal, db)
-        except (telegram.TelegramError, CrmBitrixError):
-            raise WebhookSetupError("Не удалось подготовить коннектор Telegram. Проверьте авторизацию и общую Открытую линию приложения.") from None
+        except (telegram.TelegramError, CrmBitrixError) as exc:
+            operation = getattr(exc, "operation", None)
+            remote_code = getattr(exc, "remote_code", None)
+            logger.warning("Telegram connector preparation failed: code=%s operation=%s remote_code=%s",
+                           exc.code, operation, remote_code)
+            diagnostic = ""
+            if operation in {"imconnector.register", "imconnector.activate"}:
+                diagnostic = " Метод: " + operation + ", код: " + (remote_code or "unknown") + "."
+            raise WebhookSetupError("Не удалось подготовить коннектор Telegram. Проверьте авторизацию и общую Открытую линию приложения." + diagnostic) from None
         # Token refresh during preparation can commit. Lock AFTER it, before
         # touching edna callbacks, and hold the lock until Channel is committed.
         db.refresh(portal, with_for_update=True)

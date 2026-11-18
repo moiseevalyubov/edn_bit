@@ -23,8 +23,9 @@ FAILURES = frozenset({"FAILED", "UNDELIVERED", "CANCELLED", "EXPIRED"})
 
 class TelegramError(RuntimeError):
     """Only safe machine codes, never remote response bodies or credentials."""
-    def __init__(self, code, *, retryable=False, uncertain=False):
+    def __init__(self, code, *, retryable=False, uncertain=False, operation=None, remote_code=None):
         self.retryable, self.uncertain = retryable, uncertain
+        self.code, self.operation, self.remote_code = code, operation, remote_code
         super().__init__(code)
 
 
@@ -115,10 +116,25 @@ async def bitrix_call(portal, db, method, params):
     except ValueError:
         raise TelegramError("bitrix_invalid_response", retryable=True) from None
     result = data.get("result") if isinstance(data, dict) else None
+    setup = method in {"imconnector.register", "imconnector.activate"}
+    registration = method == "imconnector.register" and isinstance(result, dict)
+    remote_error = data.get("error") if isinstance(data, dict) else None
+    if registration:
+        remote_error = remote_error or result.get("error")
+    safe_error = remote_error if isinstance(remote_error, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", remote_error) else "unknown"
+    if setup:
+        # register wraps its boolean inside result.result; activate returns a
+        # direct boolean. Preserve legacy direct true for register as well.
+        confirmed = result.get("result") is True if registration else result is True
+        confirmed = confirmed and not remote_error and response.is_success
+        logger.info("Telegram Bitrix setup: method=%s HTTP=%s confirmed=%s result_type=%s error_code=%s",
+                    method, response.status_code, confirmed, type(result).__name__, safe_error if remote_error else "none")
+        if not isinstance(data, dict) or not confirmed:
+            raise TelegramError("bitrix_setup_not_confirmed", operation=method, remote_code=safe_error,
+                                retryable=response.status_code >= 500 or response.status_code == 429)
+        return True
     if not response.is_success or not isinstance(data, dict) or data.get("error") or not result:
         raise TelegramError("bitrix_api_error", retryable=response.status_code >= 500 or response.status_code == 429)
-    if method in {"imconnector.register", "imconnector.activate"} and result is not True:
-        raise TelegramError("bitrix_setup_not_confirmed")
     if isinstance(result, dict):
         if result.get("SUCCESS") is not True:
             raise TelegramError("bitrix_message_not_accepted", retryable=True)
