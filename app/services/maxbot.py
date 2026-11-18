@@ -1,6 +1,8 @@
 import logging
+import re
 
 import httpx
+from app.config import settings
 
 EDNA_API_BASE = "https://app.edna.ru/api"
 MAXBOT_API_URL = f"{EDNA_API_BASE}/v1/out-messages/max-bot"
@@ -162,7 +164,23 @@ _CALLBACK_ERROR_MESSAGES = {
     "error-callback-url-not-available": "edna не смогла открыть наш URL для проверки. Попробуйте ещё раз чуть позже.",
     "error-subject-unknown": "edna не распознала идентификатор канала (subjectId).",
     "url-not-specified": "Не передан URL webhook.",
+    "callback-url-malformed": "edna отклонила адрес webhook как недопустимый (callback-url-malformed). Проверьте адрес сервера приложения и ограничения edna.",
+    "callback-url-not-https": "URL webhook должен использовать HTTPS.",
+    "callback-url-too-long": "URL webhook слишком длинный (более 500 символов).",
+    "callback-url-not-available": "edna не смогла открыть наш URL для проверки. Проверьте доступность сервера из edna.",
+    "subject-not-found": "edna не распознала идентификатор канала (subjectId).",
 }
+
+_INVALID_CALLBACK_CODES = {
+    "callback-url-malformed", "callback-url-not-https", "callback-url-too-long",
+    "error-callback-url-not-https", "error-callback-url-max-length",
+    "url-not-specified", "subject-not-found", "error-subject-unknown",
+}
+
+
+def _callback_error_code(data) -> str:
+    code = data.get("code") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", code) else "unknown"
 
 
 def _callback_error_message(code) -> str:
@@ -194,7 +212,7 @@ async def _set_callback(api_key: str, subject_id: int, field: str, callback_url:
     запросами: так edna ещё и подписывает вебхук именем в личном кабинете,
     и клиенту видно, что именно у него настроено."""
     payload = {"subjectId": subject_id, field: callback_url}
-    logger.info("edna callback/set payload: %s", payload)
+    logger.info("edna callback/set request: subject_id=%s, field=%s", subject_id, field)
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{EDNA_API_BASE}/callback/set",
@@ -203,7 +221,12 @@ async def _set_callback(api_key: str, subject_id: int, field: str, callback_url:
             timeout=20,
         )
     if not response.is_success:
-        logger.error("edna callback/set error %s: %s", response.status_code, response.text[:500])
+        try:
+            code = _callback_error_code(response.json())
+        except ValueError:
+            code = "unknown"
+        logger.error("edna callback/set error: HTTP=%s, code=%s, subject_id=%s",
+                     response.status_code, code, subject_id)
     response.raise_for_status()
     return response.json()
 
@@ -219,7 +242,8 @@ async def set_status_callback(api_key: str, subject_id: int, callback_url: str) 
 
 
 async def configure_incoming_webhook(
-    api_key: str, sender: str, callback_url: str, status_callback_url: str | None = None
+    api_key: str, sender: str, callback_url: str, status_callback_url: str | None = None,
+    *, prepare_channel=None,
 ) -> dict:
     """Найти в edna канал, у которого subject совпадает с sender, и прописать ему
     callback_url как webhook для входящих сообщений.
@@ -289,15 +313,33 @@ async def configure_incoming_webhook(
     # fails, the caller can still store what we know (see WebhookSetupError).
     channel_type = match.get("type")
 
+    if str(channel_type or "").upper() == "TELEGRAM":
+        channel_type = "TELEGRAM"
+        if not settings.telegram_enabled:
+            raise WebhookSetupError("Поддержка Telegram ещё не включена администратором сервера.")
+        if match.get("active") is not True:
+            raise WebhookSetupError("Канал Telegram не активен в edna.")
+        if prepare_channel is not None:
+            await prepare_channel(match)
+
     # --- 2) Установка callback URL ---
     try:
         result = await set_in_message_callback(api_key, subject_id, callback_url)
     except httpx.HTTPStatusError as e:
         status = e.response.status_code
-        if status == 401:
+        if status in {401, 403}:
             raise WebhookSetupError(
-                "edna не приняла API-ключ (401) при установке webhook.", fatal=True
+                f"edna отклонила доступ при установке webhook ({status}). Проверьте API-ключ и права канала.", fatal=True
             )
+        try:
+            code = _callback_error_code(e.response.json())
+        except ValueError:
+            code = "unknown"
+        if code in _INVALID_CALLBACK_CODES:
+            raise WebhookSetupError(
+                _callback_error_message(code), fatal=True,
+                subject_id=subject_id, channel_type=channel_type,
+            ) from None
         raise WebhookSetupError(
             f"edna вернула ошибку {status} при установке webhook. Попробуйте ещё раз позже.",
             fatal=False, subject_id=subject_id, channel_type=channel_type,
@@ -308,13 +350,13 @@ async def configure_incoming_webhook(
             "Попробуйте ещё раз чуть позже.",
             fatal=False, subject_id=subject_id, channel_type=channel_type,
         )
-    code = result.get("code") if isinstance(result, dict) else None
+    code = _callback_error_code(result)
     if code != "ok":
-        # error-subject-unknown = битый конфиг канала → блокируем; остальные коды
-        # (наш URL/доступность) — временные, оставляем ручной фолбэк.
+        # Invalid configuration must not create an apparently connected channel.
+        # Availability failures retain the existing manual setup fallback.
         raise WebhookSetupError(
             _callback_error_message(code),
-            fatal=(code == "error-subject-unknown"),
+            fatal=(code in _INVALID_CALLBACK_CODES),
             subject_id=subject_id, channel_type=channel_type,
         )
 

@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     # #22: working CRM outreach stays off until the staged implementation and
     # portal checks are complete. These are deployment controls, not UI steps.
     crm_outreach_enabled: bool = False
+    # Stage 1: Open Line text only. Never enables Telegram CRM providers.
+    telegram_enabled: bool = False
     bitrix_expected_app_code: str = ""
 
     model_config = {"env_file": ".env"}

@@ -17,6 +17,9 @@ from app.services.crm_auth import require_channel_admin
 from app.services.crm_providers import stage_provider
 from app.services.bitrix import activate_connector, bind_events, create_open_line, get_open_lines, register_connector
 from app.services.maxbot import WebhookSetupError, configure_incoming_webhook
+from app.services import telegram
+from app.services.crm_auth import check_admin_context
+from app.services.crm_bitrix import CrmBitrixError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -88,13 +91,30 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
     auto_error = None
     subject_id = None
     channel_type = None
+    setup_warnings = []
+    async def prepare_new_type(profile):
+        if str(profile.get("type") or "").upper() != "TELEGRAM":
+            return
+        if not portal.app_token:
+            raise WebhookSetupError("Для Telegram нужно завершить штатное обновление приложения: отсутствует application_token.")
+        try:
+            await check_admin_context(portal, db)
+            await telegram.prepare_connector(portal, db)
+        except (telegram.TelegramError, CrmBitrixError):
+            raise WebhookSetupError("Не удалось подготовить коннектор Telegram. Проверьте авторизацию и общую Открытую линию приложения.") from None
+    options = {"prepare_channel": prepare_new_type} if settings.telegram_enabled else {}
     try:
         info = await configure_incoming_webhook(
-            body.api_key, body.sender, webhook_url, status_url
+            body.api_key, body.sender, webhook_url, status_url, **options
         )
         subject_id = info["subject_id"]
         channel_type = info.get("type")
         auto_configured = True
+        if str(channel_type or "").upper() == "TELEGRAM":
+            if not portal.open_line_id:
+                setup_warnings.append("Канал сохранён. Выберите общую Открытую линию приложения для приёма сообщений Telegram.")
+            if not info.get("status_configured"):
+                setup_warnings.append("Входящие настроены, но webhook статусов Telegram не подтверждён. Обратитесь в поддержку edna.")
     except WebhookSetupError as e:
         if e.fatal:
             logger.info("Channel (sender=%s): auto webhook setup blocked creation: %s", body.sender, e)
@@ -116,6 +136,8 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
             body.sender, type(e).__name__, e,
         )
 
+    if settings.telegram_enabled and channel_type is None:
+        raise HTTPException(503, "Не удалось определить тип канала в edna. Повторите подключение позже")
     portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
     if portal.uninstalled_at is not None:
         raise HTTPException(409, "Приложение было удалено во время подключения")
@@ -143,6 +165,7 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
         webhook_url=webhook_url,
         auto_configured=auto_configured,
         auto_error=auto_error,
+        setup_warnings=setup_warnings,
     )
 
 
@@ -163,6 +186,8 @@ async def create_line(member_id: str, db: Session = Depends(get_db), authorizati
     try:
         line_id = await create_open_line(portal, db, "edna MAX")
         await activate_connector(portal, db, line_id)
+        if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+            await telegram.prepare_connector(portal, db, line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")
     portal.open_line_id = line_id
@@ -176,11 +201,30 @@ async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db), author
     await require_channel_admin(portal, db, authorization)
     try:
         await activate_connector(portal, db, body.line_id)
+        if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+            await telegram.prepare_connector(portal, db, body.line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка активации коннектора: {e}")
     portal.open_line_id = body.line_id
     db.commit()
     return {"success": True}
+
+
+@router.post("/telegram/prepare")
+async def prepare_telegram(body: dict, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
+    if not settings.telegram_enabled:
+        return {"enabled": False}
+    portal = get_portal_or_404(body.get("member_id"), db)
+    await require_channel_admin(portal, db, authorization, always=True)
+    if not portal.app_token:
+        raise HTTPException(409, "Для Telegram нужно завершить обновление приложения")
+    try:
+        await check_admin_context(portal, db)
+        if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+            await telegram.prepare_connector(portal, db)
+    except (telegram.TelegramError, CrmBitrixError):
+        raise HTTPException(503, "Не удалось восстановить Telegram. Проверьте авторизацию и Открытую линию") from None
+    return {"enabled": True, "admin": True}
 
 
 @router.post("/portal/repair-endpoint")

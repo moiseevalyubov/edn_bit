@@ -6,12 +6,15 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.database import get_db
 from app.models import Channel, Message, MessageDeliveryTask, Portal, bitrix_chat_id_for
 from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
 from app.services.sanitize import sanitize_name, sanitize_text
+from app.services import telegram
+from app.services.telegram_delivery import accept_incoming as accept_telegram_incoming
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -80,6 +83,7 @@ def _known_user_name(db: Session, channel: Channel, subscriber_identifier: str) 
             Message.subscriber_identifier == subscriber_identifier,
             Message.user_name.isnot(None),
             Message.user_name != subscriber_identifier,
+            func.upper(func.coalesce(Channel.channel_type, "MAX_BOT")) != "TELEGRAM",
         )
         .order_by(Message.sent_at.desc())
         .first()
@@ -150,6 +154,26 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
         return JSONResponse({"error": "forbidden"}, status_code=403)
 
     body = await request.body()
+    if telegram.is_telegram(channel):
+        if len(body) > 65536:
+            return JSONResponse({"error": "payload_too_large"}, status_code=413)
+        try:
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise telegram.TelegramError("invalid_payload")
+            accept_telegram_incoming(db, channel, data)
+        except telegram.TelegramError as exc:
+            db.rollback()
+            logger.warning("Telegram incoming rejected: channel=%s code=%s", channel.id, str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=503 if exc.retryable else 422)
+        except (ValueError, TypeError):
+            db.rollback()
+            return JSONResponse({"error": "invalid_payload"}, status_code=400)
+        except Exception:
+            db.rollback()
+            telegram.log_exception("Telegram incoming could not be persisted: channel=%s", channel.id)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
     logger.info(
         "Incoming webhook (channel %s, type %s): %s",
         channel.id, channel.channel_type or "unknown", body[:500],

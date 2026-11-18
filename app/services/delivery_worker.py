@@ -26,6 +26,9 @@ from app.services.token import PaymentRequiredError
 from app.services.task_types import SEND_CRM_TO_EDNA, SEND_TO_BITRIX, SEND_TO_EDNA, SYNC_CRM_PROVIDER, UPDATE_CRM_STATUS
 from app.services.crm_worker import execute_crm_task
 from app.services.crm_providers import execute_provider_task, reconcile_local_providers
+from app.services import telegram
+from app.services.telegram_delivery import execute_task as execute_telegram_task, recover_task as recover_telegram_task
+from app.services.crm_locks import operation_lock
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +197,8 @@ async def _execute_outgoing(channel_id: int, payload: dict) -> None:
         # MAX Bot keeps its own endpoint; every other edna channel type goes through
         # the MAX endpoint, which also needs the type of the recipient's identifier.
         use_max_endpoint = not is_max_bot_channel(channel)
+        if use_max_endpoint and (channel.channel_type or "").upper() != "MAX":
+            raise RuntimeError("Unsupported legacy channel transport")
         to_type = _recipient_id_type(db, channel_id, max_id) if use_max_endpoint else None
 
         if payload["msg_type"] == "media":
@@ -343,6 +348,8 @@ async def _process_one_task() -> bool:
         held_types = []
         if not settings.crm_outreach_enabled:
             held_types.append(SEND_CRM_TO_EDNA)
+        if not settings.telegram_enabled:
+            held_types.extend([telegram.SEND, telegram.RECEIVE])
         task = (
             db.query(MessageDeliveryTask)
             .filter_by(status="pending")
@@ -381,6 +388,9 @@ async def _process_one_task() -> bool:
 
     if task_type in {SEND_CRM_TO_EDNA, UPDATE_CRM_STATUS}:
         await execute_crm_task(task_id, task_type, SessionLocal)
+        return True
+    if task_type in telegram.TASK_TYPES:
+        await execute_telegram_task(task_id, SessionLocal)
         return True
     if task_type == SYNC_CRM_PROVIDER:
         await execute_provider_task(task_id, SessionLocal)
@@ -452,7 +462,19 @@ async def _reset_stale_tasks() -> None:
             .all()
         )
         for t in stale:
-            if t.task_type == SEND_CRM_TO_EDNA:
+            if t.task_type in telegram.TASK_TYPES:
+                try:
+                    message_id = json.loads(t.payload).get("message_id")
+                    with operation_lock(db.get_bind(), message_id, namespace=221911260) as acquired:
+                        if not acquired:
+                            continue
+                        db.refresh(t)
+                        if t.status != "processing" or t.updated_at >= cutoff:
+                            continue
+                        recover_telegram_task(db, t)
+                except (ValueError, TypeError, AttributeError):
+                    t.status, t.last_error = "failed", "invalid_telegram_task"
+            elif t.task_type == SEND_CRM_TO_EDNA:
                 _recover_crm_send(db, t)
             else:
                 t.status = "pending"

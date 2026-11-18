@@ -290,9 +290,10 @@ SETTINGS_HTML = """<!DOCTYPE html>
           <h6 class="mb-1 text-success">✓ Канал подключён и настроен</h6>
           <p class="text-muted small mb-0">Webhook автоматически прописан в edna — больше ничего делать не нужно.</p>
         </div>
+        <div id="channelSetupWarnings" class="alert alert-warning d-none"></div>
         <!-- Fallback: ask the user to set the URL manually -->
         <div id="webhookManual" class="d-none">
-          <h6 class="mb-2">✓ Канал подключён</h6>
+          <h6 class="mb-2">Канал сохранён. Требуется настройка приёма сообщений</h6>
           <div id="webhookManualReason" class="alert alert-warning small d-none mb-2"></div>
           <p class="text-muted small mb-2">Скопируйте этот URL и укажите его как webhook для входящих сообщений в личном кабинете edna:</p>
           <div class="webhook-box" id="webhookUrl"></div>
@@ -359,6 +360,14 @@ function prepareCrm() {
     });
 }
 
+function prepareTelegram() {
+  return fetch('/api/telegram/prepare', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
+    .then(function(r) { return r.json().then(function(data) {
+      if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Не удалось подготовить Telegram');
+      if (data.enabled && data.admin) crmAdmin = true;
+    }); }).catch(function(error) { showFormError(error.message); });
+}
+
 function refreshCrmDiagnostics() {
   if (!crmAdmin) return;
   fetch('/api/crm/diagnostics', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
@@ -412,7 +421,7 @@ BX24.init(function() {
     }
     loadOpenLines();
     loadPortalStatus();
-    loadChannels(prepareCrm());
+    loadChannels(prepareCrm().then(prepareTelegram));
   });
 });
 
@@ -663,12 +672,24 @@ function showWebhookResult(data) {
   document.getElementById('webhookUrl').textContent = data.webhook_url;
   var auto = document.getElementById('webhookAuto');
   var manual = document.getElementById('webhookManual');
+  var warnings = data.setup_warnings || [];
+  var setup = document.getElementById('channelSetupWarnings');
+  setup.textContent = warnings.join(' ');
+  setup.classList.toggle('d-none', !warnings.length);
+  if (warnings.length && data.auto_configured) {
+    auto.classList.add('d-none');
+    manual.classList.add('d-none');
+    document.getElementById('webhookBlock').classList.remove('d-none');
+    return;
+  }
   if (data.auto_configured) {
     auto.classList.remove('d-none');
     manual.classList.add('d-none');
   } else {
     auto.classList.add('d-none');
     manual.classList.remove('d-none');
+    showFormError('Канал сохранён, но автоматическая настройка приёма сообщений не выполнена. ' +
+      (data.auto_error || 'Настройте webhook по инструкции ниже.'));
     var reason = document.getElementById('webhookManualReason');
     if (data.auto_error) {
       reason.textContent = 'Автоматическая настройка не удалась: ' + data.auto_error;
@@ -725,6 +746,7 @@ function showFormError(msg) {
   var el = document.getElementById('formError');
   el.textContent = msg;
   el.classList.remove('d-none');
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
 }
 
 function showFieldError(elId, msg) {

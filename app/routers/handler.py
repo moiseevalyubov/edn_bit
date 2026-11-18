@@ -18,6 +18,8 @@ from app.models import Channel, Message, Portal, SeenEvent, max_bot_channel_filt
 from app.services.delivery_worker import enqueue_outgoing
 from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
+from app.services import telegram
+from app.services.telegram_delivery import accept_outgoing as accept_telegram_outgoing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -80,7 +82,7 @@ def _parse_php_form(flat: dict) -> dict:
 
 
 def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
-    if settings.crm_outreach_enabled or portal.crm_outreach_enabled:
+    if settings.crm_outreach_enabled or portal.crm_outreach_enabled or settings.telegram_enabled:
         # Event OAuth belongs to the initiating employee. Preserve the admin
         # installation credentials required by provider management.
         return
@@ -121,11 +123,11 @@ async def handler(request: Request, db: Session = Depends(get_db)):
     elif "multipart/form-data" in content_type:
         return RedirectResponse("/settings", status_code=303)
     else:
-        logger.info("Handler received: %s", body[:500])
+        logger.info("Handler received JSON event (%s bytes)", len(body))
         try:
             data = json.loads(body)
         except Exception:
-            logger.error("Handler: failed to parse body (content-type=%s): %s", content_type, body[:200])
+            logger.error("Handler: failed to parse body (content-type=%s)", content_type)
             return JSONResponse({"status": "ok"})
 
     # SEC-7: tolerate non-object payloads without crashing on .get() below
@@ -155,6 +157,29 @@ async def handler(request: Request, db: Session = Depends(get_db)):
             return JSONResponse({"status": "ok"})
     else:
         logger.warning("Handler: portal %s has no app_token stored — skipping token check", member_id)
+
+    event_data = data.get("data") if isinstance(data.get("data"), dict) else {}
+    if event_data.get("CONNECTOR") == telegram.CONNECTOR:
+        if not portal.app_token or not settings.telegram_enabled:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if event != "ONIMCONNECTORMESSAGEADD":
+            return JSONResponse({"status": "ok"})
+        # Durable id-based dedup replaces the legacy pre-commit replay fingerprint
+        # for Telegram: a failed DB write must remain retryable.
+        try:
+            accept_telegram_outgoing(db, portal, data)
+        except telegram.TelegramError as exc:
+            db.rollback()
+            logger.warning("Telegram operator event rejected: portal=%s code=%s", portal.id, str(exc))
+            return JSONResponse({"error": str(exc)}, status_code=503 if exc.retryable else 422)
+        except Exception:
+            db.rollback()
+            telegram.log_exception("Telegram operator event could not be persisted: portal=%s", portal.id)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
+    # Never interpret another connector's ids as legacy MAX ids.
+    if event_data.get("CONNECTOR") not in (None, "max_bot"):
+        return JSONResponse({"status": "ok"})
 
     # SEC-2: anti-replay — reject requests with a fingerprint seen in the last 10 minutes
     fingerprint = hashlib.sha256(body).hexdigest()
@@ -250,6 +275,9 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             channel = db.query(Channel).filter_by(
                 portal_id=portal.id, sender=sender, is_active=True
             ).first()
+            if channel and telegram.is_telegram(channel):
+                logger.warning("Legacy event cannot use Telegram channel %s", channel.id)
+                continue
             if not channel:
                 logger.warning(
                     "Skipping msg: no active channel with sender=%r for chat_id=%r",

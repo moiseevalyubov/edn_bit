@@ -238,6 +238,52 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
         await self.sync()
         self.assertIn("edna_max_" + str(new_id), self.remote)
 
+    async def test_rejected_callback_url_is_visible_and_does_not_create_channel(self):
+        self.granted_scope = False  # Version 1 still has no messageservice scope.
+        await self.prepare()
+        original = self.bitrix
+        for http_status in (400, 200):
+            with self.subTest(http_status=http_status):
+                def rejected(request):
+                    if request.url.host != "app.edna.ru":
+                        return original(request)
+                    if request.url.path.endswith("/channel-profile"):
+                        return httpx.Response(200, json=[{"subject": "broken-sender", "subjectId": 77, "type": "MAX"}])
+                    self.assertTrue(request.url.path.endswith("/callback/set"))
+                    return httpx.Response(http_status, json={"code": "callback-url-malformed",
+                        "args": {"url": "https://app.invalid/incoming/never-log-webhook-secret"}})
+                with patch.object(self, "bitrix", side_effect=rejected), self.assertLogs("app.services.maxbot", level="INFO") as logs:
+                    response = await self.client.post("/api/channels", headers=self.auth(), json={
+                        "member_id": "test-portal", "name": "Broken callback", "api_key": "never-log-api-key", "sender": "broken-sender"})
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertIn("callback-url-malformed", response.json()["detail"])
+                text = " ".join(logs.output) + response.text
+                self.assertNotIn("never-log-webhook-secret", text)
+                self.assertNotIn("never-log-api-key", text)
+                self.assertNotRegex(text, r"/incoming/[0-9a-f]{32}")
+                with self.Session() as db:
+                    self.assertIsNone(db.query(Channel).filter_by(sender="broken-sender").first())
+                self.assertEqual(self.tasks(SYNC_CRM_PROVIDER), [])
+
+    async def test_transient_callback_failure_keeps_legacy_manual_setup_contract(self):
+        self.granted_scope = False
+        await self.prepare()
+        original = self.bitrix
+        def unavailable(request):
+            if request.url.host != "app.edna.ru":
+                return original(request)
+            if request.url.path.endswith("/channel-profile"):
+                return httpx.Response(200, json=[{"subject": "manual-sender", "subjectId": 78, "type": "MAX"}])
+            return httpx.Response(503, text="temporarily unavailable")
+        with patch.object(self, "bitrix", side_effect=unavailable):
+            response = await self.client.post("/api/channels", headers=self.auth(), json={
+                "member_id": "test-portal", "name": "Manual setup", "api_key": "synthetic", "sender": "manual-sender"})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertFalse(response.json()["auto_configured"])
+        self.assertTrue(response.json()["auto_error"])
+        self.assertEqual(response.json()["channel"]["channel_type"], "MAX")
+        self.assertEqual(self.tasks(SYNC_CRM_PROVIDER), [])
+
     async def test_rename_updates_name_preserving_code_and_messages_can_still_be_accepted(self):
         await self.prepare()
         await self.sync()

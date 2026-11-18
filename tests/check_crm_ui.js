@@ -10,7 +10,7 @@ assert.ok(script);
 const elements = new Map();
 function element() {
   const node = {textContent: '', value: '', children: [], style: {}, outerHTML: '<tr id="emptyRow"></tr>', classList: {add() {}, remove() {}, toggle() {}}, focus() {},
-    appendChild(child) { this.children.push(child); }};
+    appendChild(child) { this.children.push(child); }, scrollIntoView() { this.scrolled = true; }};
   Object.defineProperty(node, 'id', {set(value) { elements.set(value, node); }});
   return node;
 }
@@ -97,6 +97,14 @@ async function main() {
   assert.equal(renamed.url, '/api/channels/9');
   assert.equal(JSON.parse(renamed.options.body).name, 'New name');
   assert.equal(renamed.options.headers.Authorization, 'Bearer synthetic-ui-token');
+  context.showWebhookResult({auto_configured: false, auto_error: 'Callback unavailable', webhook_url: 'https://app.invalid/incoming/test'});
+  assert.ok(document.getElementById('formError').textContent.includes('Callback unavailable'));
+  assert.ok(document.getElementById('formError').textContent.includes('не выполнена'));
+  assert.equal(document.getElementById('formError').scrolled, true, 'Manual setup warning must be brought into view');
+  context.showWebhookResult({auto_configured: true, setup_warnings: ['Select the common Open Line'], webhook_url: 'https://app.invalid/incoming/test'});
+  assert.equal(document.getElementById('channelSetupWarnings').textContent, 'Select the common Open Line');
+  context.showWebhookResult({auto_configured: true, webhook_url: 'https://app.invalid/incoming/test'});
+  assert.equal(document.getElementById('channelSetupWarnings').textContent, '', 'A later healthy setup clears the warning');
   console.log('CRM UI checks passed: silent background sync, visible errors, single initial render, authorization, rename');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

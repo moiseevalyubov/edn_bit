@@ -38,6 +38,8 @@ from app.services.bitrix import send_delivery_status
 from app.services.delivery_worker import notify_outgoing_undelivered
 from app.services.rate_limiter import rate_limiter
 from app.services.crm_outreach import CrmRequestError, record_edna_status
+from app.services import telegram
+from app.services.telegram_delivery import accept_status as accept_telegram_status
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -84,6 +86,18 @@ async def status_callback(webhook_token: str, request: Request, db: Session = De
         logger.error("Status: тело не является JSON-объектом")
         if not channel.is_active:
             return JSONResponse({"error": "forbidden"}, status_code=403)
+        return _ok()
+
+    if telegram.is_telegram(channel):
+        try:
+            accept_telegram_status(db, channel, data)
+        except telegram.TelegramError as exc:
+            db.rollback()
+            return JSONResponse({"error": str(exc)}, status_code=503 if exc.retryable else 422)
+        except Exception:
+            db.rollback()
+            telegram.log_exception("Telegram status could not be persisted: channel=%s", channel.id)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
         return _ok()
 
     try:

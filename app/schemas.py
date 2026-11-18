@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChannelCreate(BaseModel):
@@ -33,6 +33,7 @@ class ChannelSaveResponse(BaseModel):
     webhook_url: str
     auto_configured: bool = False
     auto_error: Optional[str] = None
+    setup_warnings: list[str] = Field(default_factory=list)
 
 
 class OpenLineSet(BaseModel):

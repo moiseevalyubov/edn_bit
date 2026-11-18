@@ -8,12 +8,14 @@ from app.database import Base, engine
 from app.routers import api, crm_management, crm_messages, files, handler, incoming, install, probe22, settings_page, status
 from app.config import settings
 from app.migrations.crm_outreach_v1 import migrate_crm_outreach
+from app.services.log_paths import PrivatePathFilter, public_path
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn.access").addFilter(PrivatePathFilter())
 
 migrate_crm_outreach(engine, Base.metadata)
 
@@ -210,7 +212,7 @@ async def log_requests(request: Request, call_next):
     start = time.time()
     response = await call_next(request)
     duration = round((time.time() - start) * 1000)
-    logger.info("%s %s → %d (%dms)", request.method, request.url.path, response.status_code, duration)
+    logger.info("%s %s → %d (%dms)", request.method, public_path(request.url.path), response.status_code, duration)
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 

@@ -11,6 +11,8 @@ from app.models import Portal
 from app.services.bitrix import activate_connector, bind_events, register_connector
 from app.services.crm_auth import require_channel_admin
 from app.services.crm_providers import stage_portal
+from app.services import telegram
+from app.models import Channel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -60,7 +62,10 @@ async def install(request: Request, db: Session = Depends(get_db)):
     if portal:
         # Authenticate updates against the saved endpoint BEFORE accepting a new
         # endpoint, app token or credentials supplied by the install request.
-        await require_channel_admin(portal, db, "Bearer " + access_token, allow_uninstalled=True)
+        await require_channel_admin(
+            portal, db, "Bearer " + access_token,
+            allow_uninstalled=True, allow_installing=True,
+        )
         portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
         portal.access_token = access_token
         portal.refresh_token = refresh_token_val or portal.refresh_token
@@ -96,6 +101,12 @@ async def install(request: Request, db: Session = Depends(get_db)):
             logger.info("Re-activated connector for line %s", portal.open_line_id)
     except Exception as e:
         logger.warning("Post-install setup error (non-critical): %s", e)
+
+    if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+        try:
+            await telegram.prepare_connector(portal, db)
+        except Exception:
+            telegram.log_exception("Telegram post-install setup incomplete: portal_id=%s", portal.id)
 
     return HTMLResponse("""
 <!DOCTYPE html>
