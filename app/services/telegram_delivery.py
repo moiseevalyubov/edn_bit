@@ -79,8 +79,9 @@ def accept_incoming(db, channel, data):
     previous = db.query(Message).filter_by(channel_id=channel.id, direction="incoming",
                                           subscriber_identifier=address).order_by(Message.id.desc()).first()
     name = sanitize_name(user.get("firstName") or user.get("displayName") or user.get("userName"))
-    name_source = "userInfo" if name else "history" if previous and previous.user_name else "identifier"
-    name = name or (previous.user_name if previous else None) or ("Telegram " + address)
+    username = tg.incoming_username(data)
+    name_source = "userInfo" if name else "TELEGRAM_USERNAME" if username else "history" if previous and previous.user_name else "identifier"
+    name = name or username or (previous.user_name if previous else None) or ("Telegram " + address)
     last_name = sanitize_name(user.get("lastName")) or (previous.user_last_name if previous else None)
     name = name.replace("[", "［").replace("]", "］")
     last_name = last_name.replace("[", "［").replace("]", "］") if last_name else None
@@ -187,7 +188,8 @@ def accept_status(db, channel, data):
         raise tg.TelegramError("telegram_request_unknown", retryable=True)
     key = "tg:status:%s:%s" % (message.id, status)
     _task(db, channel.id, tg.STATUS, key,
-          {"message_id": message.id, "status": status})
+          {"message_id": message.id, "status": status,
+           "date": int(_time(data.get("statusAt")).replace(tzinfo=timezone.utc).timestamp())})
     saved_channel_id, saved_message_id = channel.id, message.id
     _commit(db)
     logger.info("Telegram status saved: channel=%s message_id=%s request_id=%s status=%s",
@@ -295,13 +297,16 @@ async def execute_task(task_id, session_factory):
                     apply = apply and (status in tg.FAILURES or ranks.get(status, 0) >= ranks.get(prior, 0))
                     if apply:
                         if status == "READ":
-                            await tg.bitrix_call(channel.portal, db, "imconnector.send.status.delivery", {
+                            params = {
                                 "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id), "MESSAGES": [{
                                     "im": {"chat_id": int(message.bitrix_chat_id), "message_id": int(message.im_message_id)},
-                                    "message": {"id": [message.edna_request_id]},
+                                    "message": {"id": [message.edna_request_id],
+                                                "date": payload.get("date") or int(datetime.now(timezone.utc).timestamp())},
                                     "chat": {"id": tg.chat_id(channel, message.subscriber_identifier)},
                                 }],
-                            })
+                            }
+                            tg.log_payload("Bitrix READ request", params, channel.id)
+                            await tg.bitrix_call(channel.portal, db, "imconnector.send.status.delivery", params)
                             logger.info("Telegram READ forwarded to Bitrix: channel=%s message_id=%s request_id=%s",
                                         channel.id, message.id, message.edna_request_id)
                         elif status in tg.FAILURES:

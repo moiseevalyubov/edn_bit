@@ -5,7 +5,7 @@ import unittest
 if os.environ.get("CODEX_CRM_ISOLATED_TESTS") != "1":
     raise unittest.SkipTest("Use tests/run_isolated.py")
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -153,6 +153,54 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertIn('"userInfo":null', " ".join(logs.output))
         self.assertIn('name_source=identifier', " ".join(logs.output))
 
+    async def test_null_userinfo_uses_typed_telegram_username_for_contact_and_chat(self):
+        data = self.payload()
+        data['userInfo'] = None
+        data['subscriber']['identifiers'].insert(0, {'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'})
+        with self.assertLogs('app', level='INFO') as logs:
+            response = await self.client.post('/incoming/tg-token', json=data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('name_source=TELEGRAM_USERNAME', ' '.join(logs.output))
+        await worker._process_one_task()
+        forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(forwarded['user']['name'], '@demo_customer')
+        self.assertEqual(forwarded['chat']['name'], '@demo_customer')
+        self.assertEqual(forwarded['user']['id'], 'tg:12345678901234567')
+        self.assertNotIn('phone', forwarded['user'])
+        self.assertNotIn('disable_crm', forwarded['message'])
+        with self.Session() as db:
+            message = db.query(Message).filter_by(direction='incoming').one()
+            self.assertEqual(message.user_name, '@demo_customer')
+            self.assertEqual(message.subscriber_identifier, '12345678901234567')
+
+    async def test_real_name_has_priority_and_username_change_does_not_change_identity(self):
+        data = self.payload()
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'old_username'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        first = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(first['user']['name'], 'Test')
+        data['id'], data['userInfo'] = '102', None
+        data['subscriber']['identifiers'][-1]['value'] = 'new_username'
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        second = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(second['user']['name'], '@new_username')
+        self.assertEqual(first['user']['id'], second['user']['id'])
+        self.assertEqual(first['chat']['id'], second['chat']['id'])
+
+    async def test_missing_username_uses_same_channel_history(self):
+        data = self.payload()
+        data['userInfo'] = None
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'known_username'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        data['id'] = '102'
+        data['subscriber']['identifiers'].pop()
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        with self.Session() as db:
+            messages = db.query(Message).filter_by(direction='incoming').order_by(Message.id).all()
+            self.assertEqual([m.user_name for m in messages], ['@known_username', '@known_username'])
+
     async def test_status_diagnostics_identify_read_and_do_not_mark_sent_as_read(self):
         await self.send_queued()
         with patch.object(tg, "send_text", AsyncMock()):
@@ -162,7 +210,8 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.bitrix.reset_mock()
         for state in ("SENT", "DELIVERED", "READ"):
             with self.assertLogs("app", level="INFO") as logs:
-                response = await self.client.post("/status/tg-token", json={"requestId": request_id, "status": state})
+                response = await self.client.post("/status/tg-token", json={"requestId": request_id, "status": state,
+                    "statusAt": "2026-11-18T23:56:48.710994009Z"})
                 await worker._process_one_task()
             self.assertEqual(response.status_code, 200)
             diagnostic = " ".join(logs.output)
@@ -172,6 +221,9 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
             if state == "READ":
                 self.assertIn("Telegram READ forwarded to Bitrix", diagnostic)
                 self.assertEqual(self.bitrix.call_args.args[2], "imconnector.send.status.delivery")
+                receipt = self.bitrix.call_args.args[3]['MESSAGES'][0]
+                self.assertEqual(receipt['message']['date'], int(datetime(2026, 11, 18, 23, 56, 48, tzinfo=timezone.utc).timestamp()))
+                self.assertEqual(receipt['message']['id'], [request_id])
             else:
                 self.bitrix.assert_not_awaited()
 
@@ -586,6 +638,38 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
 
 
 class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
+    def test_username_is_optional_typed_unambiguous_and_never_a_recipient(self):
+        for identifiers, expected in (
+            ([{'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'}], '@demo_customer'),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': '@demo_customer'}], '@demo_customer'),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': '<b>bad</b>'}], None),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': 'name with spaces'}], None),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': 123}], None),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': 'one'}, {'type': 'TELEGRAM_USERNAME', 'value': 'two'}], None),
+            ([{'type': 'MAX_USERNAME', 'value': 'demo_customer'}], None),
+            ([], None),
+        ):
+            payload = {'subscriber': {'identifiers': identifiers}}
+            self.assertEqual(tg.incoming_username(payload), expected)
+            with self.assertRaises(tg.TelegramError):
+                tg.incoming_identity(payload)  # A username never replaces TELEGRAM_ID.
+
+    async def test_read_response_validates_success_not_only_http_status(self):
+        from types import SimpleNamespace
+        portal = SimpleNamespace(client_endpoint='https://portal.invalid/rest/')
+        for success in (True, False):
+            client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+                json={'result': {'SUCCESS': success, 'DATA': []}})))
+            with patch.object(tg.httpx, 'AsyncClient', return_value=client), \
+                 patch.object(tg, 'get_valid_token', AsyncMock(return_value='synthetic')), \
+                 self.assertLogs(tg.logger, level='INFO') as logs:
+                if success:
+                    await tg.bitrix_call(portal, None, 'imconnector.send.status.delivery', {})
+                else:
+                    with self.assertRaises(tg.TelegramError):
+                        await tg.bitrix_call(portal, None, 'imconnector.send.status.delivery', {})
+            self.assertIn('SUCCESS=' + str(success), ' '.join(logs.output))
+
     async def test_bitrix_setup_accepts_only_explicit_success_in_method_specific_envelope(self):
         from types import SimpleNamespace
         portal = SimpleNamespace(client_endpoint="https://portal.invalid/rest/")

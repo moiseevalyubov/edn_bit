@@ -96,6 +96,22 @@ def incoming_identity(data):
     return address, phone
 
 
+def incoming_username(data):
+    """Optional display label, never an address or a cross-channel identity."""
+    subscriber = data.get("subscriber")
+    identifiers = subscriber.get("identifiers") if isinstance(subscriber, dict) else None
+    if not isinstance(identifiers, list):
+        return None
+    usernames = set()
+    for item in identifiers:
+        if not isinstance(item, dict) or item.get("type") != "TELEGRAM_USERNAME" or not isinstance(item.get("value"), str):
+            continue
+        value = item["value"].strip().removeprefix("@")
+        if value and len(value) <= 254 and re.fullmatch(r"[A-Za-z0-9_]+", value, flags=re.ASCII):
+            usernames.add(value)
+    return "@" + usernames.pop() if len(usernames) == 1 else None
+
+
 def chat_id(channel, address):
     # Stable across rename/reconnect; punctuation in sender cannot confuse parsing.
     sender_key = hashlib.sha256(channel.sender.encode("utf-8")).hexdigest()[:32]
@@ -128,6 +144,10 @@ async def bitrix_call(portal, db, method, params):
     if registration:
         remote_error = remote_error or result.get("error")
     safe_error = remote_error if isinstance(remote_error, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", remote_error) else "unknown"
+    if method == "imconnector.send.status.delivery":
+        logger.info("Telegram Bitrix READ response: HTTP=%s SUCCESS=%s error_code=%s",
+                    response.status_code, result.get("SUCCESS") is True if isinstance(result, dict) else result is True,
+                    safe_error if remote_error else "none")
     if setup:
         # register wraps its boolean inside result.result; activate returns a
         # direct boolean. Preserve legacy direct true for register as well.
