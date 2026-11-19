@@ -163,14 +163,14 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertIn('name_source=TELEGRAM_USERNAME', ' '.join(logs.output))
         await worker._process_one_task()
         forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
-        self.assertEqual(forwarded['user']['name'], '@demo_customer')
-        self.assertEqual(forwarded['chat']['name'], '@demo_customer')
+        self.assertEqual(forwarded['user']['name'], 'demo_customer')
+        self.assertEqual(forwarded['chat']['name'], 'demo_customer')
         self.assertEqual(forwarded['user']['id'], 'tg:12345678901234567')
         self.assertNotIn('phone', forwarded['user'])
         self.assertNotIn('disable_crm', forwarded['message'])
         with self.Session() as db:
             message = db.query(Message).filter_by(direction='incoming').one()
-            self.assertEqual(message.user_name, '@demo_customer')
+            self.assertEqual(message.user_name, 'demo_customer')
             self.assertEqual(message.subscriber_identifier, '12345678901234567')
 
     async def test_real_name_has_priority_and_username_change_does_not_change_identity(self):
@@ -185,7 +185,7 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
         await worker._process_one_task()
         second = self.bitrix.call_args.args[3]['MESSAGES'][0]
-        self.assertEqual(second['user']['name'], '@new_username')
+        self.assertEqual(second['user']['name'], 'new_username')
         self.assertEqual(first['user']['id'], second['user']['id'])
         self.assertEqual(first['chat']['id'], second['chat']['id'])
 
@@ -199,7 +199,92 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
         with self.Session() as db:
             messages = db.query(Message).filter_by(direction='incoming').order_by(Message.id).all()
-            self.assertEqual([m.user_name for m in messages], ['@known_username', '@known_username'])
+            self.assertEqual([m.user_name for m in messages], ['known_username', 'known_username'])
+
+    async def create_placeholder_dialog(self):
+        data = self.payload()
+        data['userInfo'] = None
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        return data
+
+    async def test_placeholder_dialog_renamed_without_recreating_contact_or_resending_text(self):
+        data = await self.create_placeholder_dialog()
+        old_chat = self.bitrix.call_args.args[3]['MESSAGES'][0]['chat']['id']
+        data['id'] = '102'
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()  # Deliver the new text first.
+        self.assertEqual(self.bitrix.call_args.args[2], 'imconnector.send.messages')
+        await worker._process_one_task()  # Independent durable cosmetic update.
+        self.assertEqual(self.bitrix.call_args.args[2], 'imconnector.chat.name.set')
+        self.assertEqual(self.bitrix.call_args.args[3], {
+            'CONNECTOR': tg.CONNECTOR, 'LINE': 7, 'CHAT_ID': old_chat, 'NAME': 'demo_customer'})
+        self.assertEqual(self.rows(tg.RENAME)[0][1], 'sent')
+        self.assertEqual(sum(call.args[2] == 'imconnector.send.messages' for call in self.bitrix.call_args_list), 2)
+
+    async def test_rename_waits_for_receive_without_sending_message_itself(self):
+        data = await self.create_placeholder_dialog()
+        data['id'] = '102'
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        rename_id = self.rows(tg.RENAME)[0][0]
+        with self.Session() as db:
+            db.get(MessageDeliveryTask, rename_id).status = 'processing'
+            db.commit()
+        self.bitrix.reset_mock()
+        await delivery.execute_task(rename_id, self.Session)
+        self.bitrix.assert_not_awaited()
+        self.assertEqual(self.rows(tg.RENAME)[0][1], 'pending')
+        self.assertEqual(self.rows(tg.RENAME)[0][3], 'telegram_chat_name_waiting_for_message')
+
+    async def test_rename_failure_cannot_repeat_or_block_incoming_text(self):
+        data = await self.create_placeholder_dialog()
+        data['id'] = '102'
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        async def failed_rename(portal, db, method, params):
+            self.assertEqual(method, 'imconnector.chat.name.set')
+            raise tg.TelegramError('bitrix_transport_error', retryable=True)
+        self.bitrix.side_effect = failed_rename
+        await worker._process_one_task()
+        self.assertEqual(self.rows(tg.RECEIVE)[-1][1], 'sent')
+        self.assertEqual(self.rows(tg.RENAME)[0][1], 'pending')
+
+    async def test_stale_rename_cannot_overwrite_newer_username(self):
+        data = await self.create_placeholder_dialog()
+        for message_id, username in (('102', 'old_username'), ('103', 'latest_username')):
+            data['id'] = message_id
+            data['subscriber']['identifiers'] = [{'type': 'TELEGRAM_ID', 'value': '12345678901234567'},
+                                                {'type': 'TELEGRAM_USERNAME', 'value': username}]
+            self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        for _ in range(4):
+            await worker._process_one_task()
+        titles = [call.args[3]['NAME'] for call in self.bitrix.call_args_list if call.args[2] == 'imconnector.chat.name.set']
+        self.assertEqual(titles, ['latest_username'])
+
+    async def test_different_rename_messages_share_dialog_lock(self):
+        from contextlib import contextmanager
+        data = await self.create_placeholder_dialog()
+        for message_id, username in (('102', 'old_username'), ('103', 'latest_username')):
+            data['id'] = message_id
+            data['subscriber']['identifiers'] = [{'type': 'TELEGRAM_ID', 'value': '12345678901234567'},
+                                                {'type': 'TELEGRAM_USERNAME', 'value': username}]
+            self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        locks = []
+        @contextmanager
+        def held_lock(engine, resource_id, namespace):
+            locks.append((resource_id, namespace))
+            yield False
+        for row in self.rows(tg.RENAME):
+            with self.Session() as db:
+                db.get(MessageDeliveryTask, row[0]).status = 'processing'
+                db.commit()
+            with patch.object(delivery, 'operation_lock', held_lock):
+                await delivery.execute_task(row[0], self.Session)
+        self.assertEqual(len(locks), 2)
+        self.assertEqual(locks[0], locks[1], 'Renames for one dialog must serialize across different messages')
 
     async def test_status_diagnostics_identify_read_and_do_not_mark_sent_as_read(self):
         await self.send_queued()
@@ -638,10 +723,31 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
 
 
 class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_max_read_request_preserves_working_contract(self):
+        from app.services import bitrix
+        portal, db = object(), object()
+        with patch.object(bitrix, 'call_bitrix', AsyncMock(return_value={'result': {'SUCCESS': True, 'DATA': []}})) as remote, \
+             patch.object(bitrix.time, 'time', return_value=123):
+            await bitrix.send_delivery_status(portal, db, 7, 112, 3312, 'legacy-chat')
+        remote.assert_awaited_once_with(portal, db, 'imconnector.send.status.delivery', {
+            'CONNECTOR': bitrix.CONNECTOR_ID, 'LINE': 7, 'MESSAGES': [{
+                'im': {'chat_id': 112, 'message_id': 3312},
+                'message': {'id': ['delivered'], 'date': 123}, 'chat': {'id': 'legacy-chat'}}]})
+
+    async def test_chat_name_set_response_uses_documented_success_envelope(self):
+        from types import SimpleNamespace
+        portal = SimpleNamespace(client_endpoint='https://portal.invalid/rest/')
+        client = httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200,
+            json={'result': {'SUCCESS': True, 'DATA': {'RESULT': {}}}})))
+        with patch.object(tg.httpx, 'AsyncClient', return_value=client), \
+             patch.object(tg, 'get_valid_token', AsyncMock(return_value='synthetic')):
+            result = await tg.bitrix_call(portal, None, 'imconnector.chat.name.set', {})
+        self.assertIs(result['SUCCESS'], True)
+
     def test_username_is_optional_typed_unambiguous_and_never_a_recipient(self):
         for identifiers, expected in (
-            ([{'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'}], '@demo_customer'),
-            ([{'type': 'TELEGRAM_USERNAME', 'value': '@demo_customer'}], '@demo_customer'),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': 'demo_customer'}], 'demo_customer'),
+            ([{'type': 'TELEGRAM_USERNAME', 'value': '@demo_customer'}], 'demo_customer'),
             ([{'type': 'TELEGRAM_USERNAME', 'value': '<b>bad</b>'}], None),
             ([{'type': 'TELEGRAM_USERNAME', 'value': 'name with spaces'}], None),
             ([{'type': 'TELEGRAM_USERNAME', 'value': 123}], None),

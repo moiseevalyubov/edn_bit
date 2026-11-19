@@ -102,6 +102,9 @@ def accept_incoming(db, channel, data):
     db.add(message)
     db.flush()
     _task(db, channel.id, tg.RECEIVE, key, {"message_id": message.id, "phone": phone})
+    if previous is not None and name_source != "identifier" and (name, last_name) != (previous.user_name, previous.user_last_name):
+        _task(db, channel.id, tg.RENAME, "tg:rename:%s" % message.id,
+              {"message_id": message.id, "receive_key": key})
     saved_channel_id, saved_message_id = channel.id, message.id
     _commit(db)
     logger.info("Telegram incoming saved: channel=%s message_id=%s external_id=%s name_source=%s",
@@ -244,7 +247,16 @@ async def execute_task(task_id, session_factory):
         payload = json.loads(row.payload)
         message_id = payload.get("message_id")
         engine = probe.get_bind()
-    with operation_lock(engine, message_id, namespace=221911260) as acquired:
+        lock_id, lock_namespace = message_id, 221911260
+        if row.task_type == tg.RENAME:
+            naming_message = probe.get(Message, message_id)
+            if naming_message:
+                # Different messages may rename the same dialog. Serialize those
+                # requests, including across OAuth-refresh commits and replicas.
+                identity = _json([row.channel_id, naming_message.line_id, naming_message.subscriber_identifier])
+                lock_id = int(hashlib.sha256(identity.encode()).hexdigest()[:16], 16)
+                lock_namespace = 221911261
+    with operation_lock(engine, lock_id, namespace=lock_namespace) as acquired:
         with session_factory() as db:
             task = db.get(MessageDeliveryTask, task_id)
             if task.status != "processing":
@@ -261,6 +273,25 @@ async def execute_task(task_id, session_factory):
                     raise tg.TelegramError("invalid_telegram_task")
                 if task.task_type == tg.RECEIVE:
                     await _deliver(db, message, payload.get("phone"))
+                elif task.task_type == tg.RENAME:
+                    if not channel.is_active or channel.portal.uninstalled_at is not None or not settings.telegram_enabled:
+                        raise tg.TelegramError("channel_unavailable")
+                    received = db.query(MessageDeliveryTask).filter_by(dedup_key=payload.get("receive_key"),
+                        task_type=tg.RECEIVE, channel_id=channel.id).first()
+                    if received is None or received.status == "failed":
+                        raise tg.TelegramError("telegram_chat_name_message_failed")
+                    if received.status != "sent":
+                        raise tg.TelegramError("telegram_chat_name_waiting_for_message", retryable=True)
+                    latest = db.query(Message).filter_by(channel_id=channel.id, direction="incoming",
+                        subscriber_identifier=message.subscriber_identifier, line_id=message.line_id).order_by(Message.id.desc()).first()
+                    # A queued older rename must not overwrite a newer username.
+                    if latest and (latest.user_name, latest.user_last_name) == (message.user_name, message.user_last_name):
+                        title = " ".join(value for value in (message.user_name, message.user_last_name) if value)
+                        await tg.bitrix_call(channel.portal, db, "imconnector.chat.name.set", {
+                            "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id),
+                            "CHAT_ID": tg.chat_id(channel, message.subscriber_identifier), "NAME": title,
+                        })
+                        logger.info("Telegram chat name updated: channel=%s message_id=%s", channel.id, message.id)
                 elif task.task_type == tg.NOTICE:
                     await _deliver(db, message, notice=payload["reason"])
                 elif task.task_type == tg.SEND:

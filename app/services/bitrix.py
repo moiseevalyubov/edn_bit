@@ -298,19 +298,20 @@ async def send_delivery_status(
     bitrix_message_id: int,
     chat_id: str,
 ) -> None:
-    await call_bitrix(
-        portal,
-        db,
-        "imconnector.send.status.delivery",
-        {
-            "CONNECTOR": CONNECTOR_ID,
-            "LINE": line_id,
-            "MESSAGES": [
-                {
-                    "im": {"chat_id": bitrix_chat_id, "message_id": bitrix_message_id},
-                    "message": {"id": ["delivered"], "date": int(time.time())},
-                    "chat": {"id": chat_id},
-                }
-            ],
-        },
-    )
+    params = {
+        "CONNECTOR": CONNECTOR_ID,
+        "LINE": line_id,
+        "MESSAGES": [
+            {
+                "im": {"chat_id": bitrix_chat_id, "message_id": bitrix_message_id},
+                "message": {"id": ["delivered"], "date": int(time.time())},
+                "chat": {"id": chat_id},
+            }
+        ],
+    }
+    # Keep the established MAX request unchanged; log it for comparison with
+    # Telegram READ receipts. OAuth is added inside call_bitrix, never logged.
+    logger.info("MAX Bitrix READ request: %s", params)
+    response = await call_bitrix(portal, db, "imconnector.send.status.delivery", params)
+    result = response.get("result") if isinstance(response, dict) else None
+    logger.info("MAX Bitrix READ response: SUCCESS=%s", result.get("SUCCESS") if isinstance(result, dict) else result)

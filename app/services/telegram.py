@@ -23,7 +23,8 @@ RECEIVE = "telegram_receive"
 SEND = "telegram_send"
 STATUS = "telegram_status"
 NOTICE = "telegram_notice"
-TASK_TYPES = frozenset({RECEIVE, SEND, STATUS, NOTICE})
+RENAME = "telegram_rename"
+TASK_TYPES = frozenset({RECEIVE, SEND, STATUS, NOTICE, RENAME})
 FAILURES = frozenset({"FAILED", "UNDELIVERED", "CANCELLED", "EXPIRED"})
 
 
@@ -109,7 +110,7 @@ def incoming_username(data):
         value = item["value"].strip().removeprefix("@")
         if value and len(value) <= 254 and re.fullmatch(r"[A-Za-z0-9_]+", value, flags=re.ASCII):
             usernames.add(value)
-    return "@" + usernames.pop() if len(usernames) == 1 else None
+    return usernames.pop() if len(usernames) == 1 else None
 
 
 def chat_id(channel, address):
@@ -147,6 +148,10 @@ async def bitrix_call(portal, db, method, params):
     if method == "imconnector.send.status.delivery":
         logger.info("Telegram Bitrix READ response: HTTP=%s SUCCESS=%s error_code=%s",
                     response.status_code, result.get("SUCCESS") is True if isinstance(result, dict) else result is True,
+                    safe_error if remote_error else "none")
+    if method == "imconnector.chat.name.set":
+        logger.info("Telegram Bitrix chat name response: HTTP=%s SUCCESS=%s error_code=%s",
+                    response.status_code, result.get("SUCCESS") is True if isinstance(result, dict) else False,
                     safe_error if remote_error else "none")
     if setup:
         # register wraps its boolean inside result.result; activate returns a
