@@ -22,7 +22,7 @@ from app.services.crm_channels import outreach_capability
 from app.services.crm_providers import stage_provider
 
 
-class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
+class TelegramFixture(DatabaseCase, unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         super().setUp()
         self.seed()
@@ -85,6 +85,7 @@ class TelegramCase(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         result = await self.client.post("/handler", json=self.event())
         self.assertEqual(result.status_code, 200, result.text)
 
+class TelegramCase(TelegramFixture):
     async def test_incoming_is_durable_namespaced_and_keeps_crm_tracker(self):
         await self.receive()
         await self.receive()
@@ -834,7 +835,7 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('\n', encoded)
         for value in ('private-api', 'private-oauth', 'private-auth', 'private-query'):
             self.assertNotIn(value, encoded)
-        self.assertIn('message=keep', encoded)
+        self.assertIn('https://example.invalid/[redacted]', encoded)
         self.assertEqual(payload['nested'][0]['X-API-KEY'], 'private-api', 'Logging must not modify request data')
 
     async def test_manual_telegram_id_replaces_unsupported_type_filter(self):

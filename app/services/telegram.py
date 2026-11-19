@@ -192,11 +192,33 @@ async def prepare_connector(portal, db, line_id=None):
 
 
 async def send_text(api_key, sender, address, text, out_message_id):
-    telegram_id(address)
     if not isinstance(text, str) or not text.strip():
         raise TelegramError("empty_text")
+    return await send_content(api_key, sender, address, {"type": "TEXT", "text": text}, out_message_id)
+
+
+async def send_media(api_key, sender, address, media_type, url, name, out_message_id, *, text=None):
+    if media_type not in {"IMAGE", "DOCUMENT"}:
+        raise TelegramError("unsupported_media_type")
+    endpoint = urlsplit(url)
+    if (endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password
+            or endpoint.fragment or len(url) > 1000):
+        raise TelegramError("invalid_media_url")
+    if not isinstance(name, str) or not name or len(name) > 25 or any(ord(c) < 32 for c in name):
+        raise TelegramError("invalid_media_name")
+    content = {"type": media_type, "url": url, "name": name}
+    if text:
+        # Same contract as MAX. Telegram caption delivery requires a live check.
+        if not isinstance(text, str) or len(text) > 4096:
+            raise TelegramError("invalid_media_text")
+        content["text"] = text
+    return await send_content(api_key, sender, address, content, out_message_id)
+
+
+async def send_content(api_key, sender, address, content, out_message_id):
+    telegram_id(address)
     payload = {"from": sender, "to": {"type": "TELEGRAM_ID", "value": address},
-               "outMessageId": out_message_id, "content": {"type": "TEXT", "text": text}}
+               "outMessageId": out_message_id, "content": content}
     log_payload("outgoing request", payload)
     try:
         async with httpx.AsyncClient() as client:

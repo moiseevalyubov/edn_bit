@@ -14,7 +14,7 @@ from app.services.delivery_worker import enqueue_incoming
 from app.services.rate_limiter import rate_limiter
 from app.services.sanitize import sanitize_name, sanitize_text
 from app.services import telegram
-from app.services.telegram_delivery import accept_incoming as accept_telegram_incoming
+from app.services.telegram_delivery import accept_incoming_with_media as accept_telegram_incoming
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -162,7 +162,7 @@ async def incoming(webhook_token: str, request: Request, db: Session = Depends(g
             if not isinstance(data, dict):
                 raise telegram.TelegramError("invalid_payload")
             telegram.log_payload("incoming", data, channel.id)
-            accept_telegram_incoming(db, channel, data)
+            await accept_telegram_incoming(db, channel, data)
         except telegram.TelegramError as exc:
             db.rollback()
             logger.warning("Telegram incoming rejected: channel=%s code=%s", channel.id, str(exc))

@@ -26,7 +26,7 @@ from app.services.token import PaymentRequiredError
 from app.services.task_types import SEND_CRM_TO_EDNA, SEND_TO_BITRIX, SEND_TO_EDNA, SYNC_CRM_PROVIDER, UPDATE_CRM_STATUS
 from app.services.crm_worker import execute_crm_task
 from app.services.crm_providers import execute_provider_task, reconcile_local_providers
-from app.services import telegram
+from app.services import telegram, telegram_files
 from app.services.telegram_delivery import execute_task as execute_telegram_task, recover_task as recover_telegram_task
 from app.services.crm_locks import operation_lock
 
@@ -522,9 +522,16 @@ async def _worker_loop() -> None:
     logger.info("Delivery worker started")
     last_stale_check = datetime.utcnow()
     last_crm_reconcile = datetime.min
+    last_media_cleanup = datetime.min
 
     while True:
         try:
+            if (datetime.utcnow() - last_media_cleanup).total_seconds() >= 3600:
+                last_media_cleanup = datetime.utcnow()
+                try:
+                    telegram_files.cleanup(SessionLocal)
+                except Exception:
+                    telegram.log_exception("Telegram file cleanup failed; will retry in one hour")
             if (datetime.utcnow() - last_crm_reconcile).total_seconds() >= 60:
                 last_crm_reconcile = datetime.utcnow()
                 try:

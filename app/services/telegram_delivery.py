@@ -8,18 +8,21 @@ import hashlib
 import json
 import logging
 import uuid
+from urllib.parse import urlsplit, parse_qsl
 
 from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.models import Channel, Message, MessageDeliveryTask, Portal
 from app.services import telegram as tg
+from app.services import telegram_files
 from app.services.crm_locks import operation_lock
 from app.services.sanitize import sanitize_name, sanitize_text
 
 logger = logging.getLogger(__name__)
 RETRY = (1, 5, 30, 120, 600, 1800)
 UNSUPPORTED = "Клиент отправил вложение. Его отображение в Telegram пока не поддерживается. Попросите клиента написать текстом."
+MEDIA_UNAVAILABLE = "Вложение клиента из Telegram не удалось загрузить. Поддерживаются изображения и документы до 64 МБ. Попросите клиента прислать файл заново или другим способом."
 
 
 def _json(data):
@@ -62,7 +65,7 @@ def _time(value):
     return datetime.utcnow()
 
 
-def accept_incoming(db, channel, data):
+def accept_incoming(db, channel, data, *, media_jobs=None):
     if not settings.telegram_enabled:
         raise tg.TelegramError("telegram_disabled")
     if not channel.is_active or not channel.portal or channel.portal.uninstalled_at is not None:
@@ -89,9 +92,19 @@ def accept_incoming(db, channel, data):
     if not isinstance(content, dict):
         raise tg.TelegramError("message_content_required")
     raw_text = content.get("text")
+    attachment = content.get("attachment")
+    is_media = (media_jobs is not None and content.get("type") in {"IMAGE", "DOCUMENT"}
+                and isinstance(attachment, dict) and not content.get("items"))
+    if content.get("type") != "TEXT":
+        caption = content.get("caption")
+        parts = [part for part in (caption, raw_text) if isinstance(part, str) and part]
+        raw_text = "\n".join(dict.fromkeys(parts))
     text = sanitize_text(raw_text).replace("[", "［").replace("]", "］") if isinstance(raw_text, str) else ""
-    if content.get("type") != "TEXT" or not text:
-        text = UNSUPPORTED
+    if is_media:
+        if len(raw_text) > 4096:
+            text += "\nПодпись сокращена. Попросите клиента прислать продолжение."
+    elif content.get("type") != "TEXT" or not text:
+        text = (text + "\n" if text else "") + UNSUPPORTED
     elif len(raw_text) > 4096:
         text += "\nТекст сокращён. Попросите клиента прислать продолжение."
     message = Message(channel_id=channel.id, direction="incoming", text=text, content_type="TEXT",
@@ -101,17 +114,56 @@ def accept_incoming(db, channel, data):
                       sent_at=_time(data.get("receivedAt")))
     db.add(message)
     db.flush()
-    _task(db, channel.id, tg.RECEIVE, key, {"message_id": message.id, "phone": phone})
+    task = _task(db, channel.id, tg.RECEIVE, key, {"message_id": message.id, "phone": phone})
+    if is_media:
+        media_jobs.append((task, message, attachment, content["type"]))
     if previous is not None and name_source != "identifier" and (name, last_name) != (previous.user_name, previous.user_last_name):
         _task(db, channel.id, tg.RENAME, "tg:rename:%s" % message.id,
               {"message_id": message.id, "receive_key": key})
     saved_channel_id, saved_message_id = channel.id, message.id
+    if media_jobs is None:
+        _commit(db)
+        _log_incoming((saved_channel_id, saved_message_id, msg_id, name_source))
+    return saved_channel_id, saved_message_id, msg_id, name_source
+
+
+def _log_incoming(saved):
+    if saved:
+        logger.info("Telegram incoming saved: channel=%s message_id=%s external_id=%s name_source=%s", *saved)
+
+
+async def accept_incoming_with_media(db, channel, data):
+    jobs = []
+    saved = accept_incoming(db, channel, data, media_jobs=jobs)
+    for task, message, attachment, expected_type in jobs:
+        try:
+            declared = attachment.get("size")
+            if declared is not None and (isinstance(declared, bool) or not isinstance(declared, int)
+                                         or not 0 < declared <= telegram_files.MAX_BYTES):
+                raise tg.TelegramError("media_invalid_size")
+            content, mime = await telegram_files.download(attachment.get("url"), {"app.edna.ru"})
+            if declared is not None and len(content) != declared:
+                raise tg.TelegramError("media_size_mismatch")
+            name = attachment.get("name")
+            actual_type = telegram_files.inspect_file(content, mime, name)[0]
+            if expected_type == "IMAGE" and actual_type != "IMAGE":
+                raise tg.TelegramError("media_type_mismatch")
+            key, _ = telegram_files.store(db, message, content, mime, name)
+            message.content_type = expected_type
+            payload = json.loads(task.payload)
+            payload["file_key"] = key
+            task.payload = _json(payload)
+            db.flush()
+        except tg.TelegramError as exc:
+            if exc.retryable:
+                raise
+            message.text = (message.text + "\n" if message.text else "") + MEDIA_UNAVAILABLE
+            logger.warning("Telegram incoming file rejected: channel=%s message_id=%s code=%s", channel.id, message.id, exc.code)
     _commit(db)
-    logger.info("Telegram incoming saved: channel=%s message_id=%s external_id=%s name_source=%s",
-                saved_channel_id, saved_message_id, msg_id, name_source)
+    _log_incoming(saved)
 
 
-def accept_outgoing(db, portal, data):
+def accept_outgoing(db, portal, data, *, media_jobs=None):
     if not settings.telegram_enabled or portal.uninstalled_at is not None:
         raise tg.TelegramError("telegram_disabled")
     if not portal.app_token:
@@ -154,6 +206,22 @@ def accept_outgoing(db, portal, data):
         raw = body.get("text")
         text = strip_bbcode(raw) if isinstance(raw, str) else ""
         content_hash = hashlib.sha256(_json([external_chat, line, im_chat, text, bool(body.get("files"))]).encode()).hexdigest()
+        files = body.get("files")
+        if files:
+            if not isinstance(files, list) or any(not isinstance(f, dict) for f in files):
+                raise tg.TelegramError("invalid_files")
+            # Signed source URLs are transient credentials, not durable task data.
+            # Their digest also detects a conflicting event with a reused IM id.
+            fingerprints = []
+            for file in files:
+                try:
+                    location = urlsplit(file.get("downloadLink") or file.get("link") or "")
+                    source_id = [location.hostname, location.path,
+                                 [(k, v) for k, v in parse_qsl(location.query) if k.lower() == "file_id"]]
+                except (ValueError, TypeError):
+                    raise tg.TelegramError("invalid_file_url") from None
+                fingerprints.append([file.get("id"), file.get("name"), file.get("mime"), source_id])
+            content_hash = hashlib.sha256(_json([external_chat, line, im_chat, text, fingerprints]).encode()).hexdigest()
         existing = db.query(MessageDeliveryTask).filter_by(dedup_key=key).first()
         if existing:
             if json.loads(existing.payload).get("content_hash") != content_hash:
@@ -170,10 +238,39 @@ def accept_outgoing(db, portal, data):
             "message_id": message.id, "chat_id": external_chat, "content_hash": content_hash,
             "attempt_started": False,
         })
-        if body.get("files") or not text or len(text) > 4096:
+        if files and len(files) == 1 and media_jobs is not None and len(text) <= 4096:
+            media_jobs.append((task, message, files[0]))
+        elif files or not text or len(text) > 4096:
             task.status, task.last_error = "failed", "telegram_text_only_or_invalid_text"
             enqueue_notice(db, message, "unsupported")
         db.flush()  # Make duplicates inside this very batch visible with autoflush=False.
+    if media_jobs is None:
+        _commit(db)
+
+
+async def accept_outgoing_with_media(db, portal, data):
+    jobs = []
+    accept_outgoing(db, portal, data, media_jobs=jobs)
+    for task, message, file in jobs:
+        try:
+            url = file.get("downloadLink") or file.get("link")
+            name = file.get("name")
+            # Only the authenticated portal's own origin is trusted initially.
+            # CDN support requires a verified source, never an arbitrary URL.
+            endpoint = urlsplit(portal.client_endpoint)
+            content, mime = await telegram_files.download(url, {endpoint.hostname})
+            key, media_type = telegram_files.store(db, message, content, mime, name)
+            message.content_type = media_type
+            payload = json.loads(task.payload)
+            payload.update(file_key=key, media_type=media_type)
+            task.payload = _json(payload)
+            db.flush()
+        except tg.TelegramError as exc:
+            if exc.retryable:
+                raise  # Entire batch rolls back; no secret URL is persisted.
+            task.status, task.last_error = "failed", exc.code
+            enqueue_notice(db, message, "media")
+            logger.warning("Telegram outgoing file rejected: channel=%s message_id=%s code=%s", message.channel_id, message.id, exc.code)
     _commit(db)
 
 
@@ -215,7 +312,7 @@ def recover_task(db, task):
         task.status = "pending"
 
 
-async def _deliver(db, message, phone=None, *, notice=None):
+async def _deliver(db, message, phone=None, *, notice=None, file_key=None):
     channel = db.get(Channel, message.channel_id)
     portal = channel.portal
     if portal.uninstalled_at is not None:
@@ -227,11 +324,21 @@ async def _deliver(db, message, phone=None, *, notice=None):
         user["phone"] = phone  # No skip_phone_validate and no invented phone.
     content = {"id": "tg:%s:%s" % (channel.subject_id, message.max_message_id),
                "date": int(message.sent_at.replace(tzinfo=timezone.utc).timestamp()), "text": message.text}
+    if file_key and not notice:
+        try:
+            entry = telegram_files.get(db, file_key, message.id)
+            content["files"] = [{"url": telegram_files.signed_url(db, file_key, message.id),
+                                 "name": entry.name.replace("[", "［").replace("]", "］")}]
+        except tg.TelegramError:
+            # A held incoming task may outlive media retention. Deliver its
+            # caption and an explicit warning rather than lose the whole event.
+            content["text"] = (message.text + "\n" if message.text else "") + MEDIA_UNAVAILABLE
     if notice:
         content.update(id="tg-notice:%s:%s" % (message.id, notice), disable_crm="Y")
         content["text"] = {
             "uncertain": "Результат отправки в Telegram неизвестен. Не отправляйте повторно до проверки в поддержке edna: клиент мог уже получить сообщение.",
-            "unsupported": "В Telegram на этом этапе поддерживается только текст. Это сообщение не отправлено.",
+            "unsupported": "Сообщение не отправлено в Telegram. Сейчас поддерживаются текст до 4096 символов и одно изображение или документ до 64 МБ за сообщение. Прикрепите вложения по одному.",
+            "media": "Файл не отправлен в Telegram: не удалось безопасно загрузить изображение или документ. Проверьте формат и размер (до 64 МБ) и прикрепите файл заново.",
         }.get(notice, "Сообщение не доставлено клиенту в Telegram. Обратитесь в поддержку edna.")
     await tg.bitrix_call(portal, db, "imconnector.send.messages", {
         "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id),
@@ -272,7 +379,7 @@ async def execute_task(task_id, session_factory):
                 if not message or message.channel_id != task.channel_id or not channel or not tg.is_telegram(channel):
                     raise tg.TelegramError("invalid_telegram_task")
                 if task.task_type == tg.RECEIVE:
-                    await _deliver(db, message, payload.get("phone"))
+                    await _deliver(db, message, payload.get("phone"), file_key=payload.get("file_key"))
                 elif task.task_type == tg.RENAME:
                     if not channel.is_active or channel.portal.uninstalled_at is not None or not settings.telegram_enabled:
                         raise tg.TelegramError("channel_unavailable")
@@ -301,6 +408,13 @@ async def execute_task(task_id, session_factory):
                         raise tg.TelegramError("channel_unavailable")
                     if settings.edna_force_fail == "1":
                         raise tg.TelegramError("forced_send_failure")
+                    # Check durable media before recording any possibly accepted POST.
+                    media_url, media_name = None, None
+                    if payload.get("file_key"):
+                        media_url = telegram_files.signed_url(db, payload["file_key"], message.id)
+                        entry = telegram_files.get(db, payload["file_key"], message.id)
+                        stem, dot, ext = entry.name.rpartition(".")
+                        media_name = stem[:24 - len(ext)] + dot + ext if dot else entry.name[:25]
                     payload["attempt_started"] = True
                     task.payload = _json(payload)
                     db.commit()  # Durable before the only possibly accepted POST.
@@ -311,8 +425,13 @@ async def execute_task(task_id, session_factory):
                     channel = db.query(Channel).filter_by(id=task.channel_id).populate_existing().with_for_update(key_share=True).one()
                     if not channel.is_active or portal.uninstalled_at is not None or not settings.telegram_enabled:
                         raise tg.TelegramError("channel_unavailable")
-                    await tg.send_text(channel.api_key, channel.sender, message.subscriber_identifier,
-                                       message.text, message.edna_request_id)
+                    if media_url:
+                        await tg.send_media(channel.api_key, channel.sender, message.subscriber_identifier,
+                                            payload["media_type"], media_url, media_name, message.edna_request_id,
+                                            text=message.text)
+                    else:
+                        await tg.send_text(channel.api_key, channel.sender, message.subscriber_identifier,
+                                           message.text, message.edna_request_id)
                 elif task.task_type == tg.STATUS:
                     source = db.query(MessageDeliveryTask).filter_by(task_type=tg.SEND, channel_id=channel.id,
                         dedup_key="tg:out:%s:%s" % (channel.portal_id, message.im_message_id)).first()

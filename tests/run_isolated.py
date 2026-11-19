@@ -38,7 +38,8 @@ def main() -> int:
                     if not isinstance(client._transport, (httpx.ASGITransport, httpx.MockTransport)):
                         raise AssertionError("Network disabled in local tests")
                     return await original_send(client, request, *args, **kwargs)
-                with patch("httpx.AsyncClient.send", new=isolated_send):
+                with patch("httpx.AsyncClient.send", new=isolated_send), \
+                     patch("socket.create_connection", side_effect=AssertionError("Network disabled in local tests")):
                     suite = unittest.defaultTestLoader.discover(str(project / "tests"))
                     result = unittest.TextTestRunner(verbosity=2).run(suite)
                     return 0 if result.wasSuccessful() else 1

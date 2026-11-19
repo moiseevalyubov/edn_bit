@@ -1,11 +1,11 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text,
+    Boolean, Column, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text,
     UniqueConstraint, false, func, or_,
 )
 from sqlalchemy import types
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, deferred
 
 from app.database import Base
 
@@ -138,6 +138,18 @@ class Message(Base):
     raw_payload = Column(Text, nullable=True)
 
     channel = relationship("Channel", back_populates="messages")
+
+
+class TelegramFile(Base):
+    """Bounded Telegram media, shared by replicas and durable across restarts."""
+    __tablename__ = "telegram_files"
+
+    key = Column(String, primary_key=True)
+    message_id = Column(Integer, ForeignKey("messages.id"), nullable=False, index=True)
+    content = deferred(Column(LargeBinary, nullable=False))
+    content_type = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 
 class SeenEvent(Base):

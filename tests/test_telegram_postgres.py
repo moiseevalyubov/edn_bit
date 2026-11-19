@@ -19,7 +19,7 @@ import test_crm_postgres as postgres_tests
 from app.config import settings
 from app.database import Base
 from app.migrations.crm_outreach_v1 import migrate_crm_outreach
-from app.models import Channel, Message, MessageDeliveryTask, Portal
+from app.models import Channel, Message, MessageDeliveryTask, Portal, TelegramFile
 from app.services import telegram as tg, telegram_delivery as delivery, delivery_worker as worker
 from app.routers import api
 from app.schemas import ChannelCreate
@@ -127,6 +127,39 @@ class TelegramPostgresTests(unittest.TestCase):
             self.assertEqual(db.query(Message).count(), 2)
             self.assertEqual(db.query(MessageDeliveryTask).filter_by(task_type=tg.RECEIVE).count(), 1)
             self.assertEqual(db.query(MessageDeliveryTask).filter_by(task_type=tg.SEND).count(), 1)
+
+    def test_concurrent_media_receipts_leave_one_file_and_survive_migration(self):
+        payload = {"id": "media-101", "subject": "tg", "subjectId": 78,
+                   "subscriber": {"identifiers": [{"type": "TELEGRAM_ID", "value": "123"}]},
+                   "messageContent": {"type": "DOCUMENT", "caption": "Caption", "attachment": {
+                       "url": "https://app.edna.ru/edna.b1/adapter-telegram/synthetic.pdf",
+                       "name": "example.pdf", "size": 12}}}
+        barrier = Barrier(2)
+        def attempt():
+            barrier.wait(timeout=10)
+            for _ in range(2):
+                with self.Session() as db:
+                    try:
+                        asyncio.run(delivery.accept_incoming_with_media(db, db.get(Channel, self.channel_id), payload))
+                        return
+                    except tg.TelegramError as exc:
+                        db.rollback()
+                        self.assertTrue(exc.retryable)
+            self.fail("Concurrent media receipt did not converge")
+        with patch.object(delivery.telegram_files, "download", AsyncMock(return_value=(b"%PDF-1.7 EOF", "application/pdf"))):
+            payload["messageContent"]["attachment"]["size"] = len(b"%PDF-1.7 EOF")
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(attempt) for _ in range(2)]
+                for result in futures:
+                    result.result(timeout=20)
+        migrate_crm_outreach(self.engine, Base.metadata)
+        with self.Session() as db:
+            self.assertEqual(db.query(TelegramFile).count(), 1)
+            self.assertEqual(db.query(Message).count(), 1)
+            self.assertEqual(db.query(MessageDeliveryTask).filter_by(task_type=tg.RECEIVE).count(), 1)
+            entry = db.query(TelegramFile).one()
+            self.assertEqual(entry.content, b"%PDF-1.7 EOF")
+            self.assertEqual(entry.message_id, db.query(Message).one().id)
 
     def test_live_send_is_not_reset_by_stale_scan_and_cannot_be_claimed_twice(self):
         self.incoming()

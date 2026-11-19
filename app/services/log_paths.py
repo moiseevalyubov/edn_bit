@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+from urllib.parse import urlsplit
 
 
 def public_path(value):
@@ -21,8 +22,21 @@ def payload_for_log(data):
         if depth > 20:
             return "[truncated]"
         if isinstance(value, dict):
-            return {key: "[redacted]" if re.sub(r"[-_]", "", key).lower() in _CREDENTIAL_KEYS
-                    else clean(item, depth + 1) for key, item in value.items()}
+            result = {}
+            for key, item in value.items():
+                normalized = re.sub(r"[-_]", "", key).lower()
+                if normalized in _CREDENTIAL_KEYS:
+                    result[key] = "[redacted]"
+                elif normalized in {"url", "link", "downloadlink"} and isinstance(item, str):
+                    # File URLs may embed opaque credentials in paths as well as queries.
+                    try:
+                        endpoint = urlsplit(item)
+                        result[key] = "%s://%s/[redacted]" % (endpoint.scheme, endpoint.hostname) if endpoint.hostname else "[redacted]"
+                    except ValueError:
+                        result[key] = "[redacted]"
+                else:
+                    result[key] = clean(item, depth + 1)
+            return result
         if isinstance(value, list):
             return [clean(item, depth + 1) for item in value]
         if isinstance(value, str):

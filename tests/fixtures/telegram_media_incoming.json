@@ -1,0 +1,182 @@
+[
+  {
+    "id": 101,
+    "subject": "test-sender",
+    "subjectId": 78,
+    "subscriber": {
+      "id": 999,
+      "identifier": "12345678901234567",
+      "identifiers": [
+        {
+          "type": "TELEGRAM_USERNAME",
+          "value": "test_user"
+        },
+        {
+          "type": "TELEGRAM_ID",
+          "value": "12345678901234567"
+        }
+      ]
+    },
+    "userInfo": null,
+    "messageContent": {
+      "type": "IMAGE",
+      "attachment": {
+        "url": "https://app.edna.ru/edna.b1/adapter-telegram/6/2026-11-19/synthetic-0.jpg",
+        "name": "example-0.jpg",
+        "size": 115855
+      },
+      "location": null,
+      "referral": null,
+      "caption": "",
+      "text": null,
+      "payload": null,
+      "story": null,
+      "items": null,
+      "contact": null,
+      "product": null,
+      "catalog": null,
+      "order": null,
+      "callPermissionReply": null
+    },
+    "receivedAt": "2026-11-19T00:00:00Z",
+    "replyOutMessageId": null,
+    "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null,
+    "lastMessage": null
+  },
+  {
+    "id": 102,
+    "subject": "test-sender",
+    "subjectId": 78,
+    "subscriber": {
+      "id": 999,
+      "identifier": "12345678901234567",
+      "identifiers": [
+        {
+          "type": "TELEGRAM_USERNAME",
+          "value": "test_user"
+        },
+        {
+          "type": "TELEGRAM_ID",
+          "value": "12345678901234567"
+        }
+      ]
+    },
+    "userInfo": null,
+    "messageContent": {
+      "type": "IMAGE",
+      "attachment": {
+        "url": "https://app.edna.ru/edna.b1/adapter-telegram/6/2026-11-19/synthetic-1.jpg",
+        "name": "example-1.jpg",
+        "size": 100003
+      },
+      "location": null,
+      "referral": null,
+      "caption": "Подпись к фото",
+      "text": null,
+      "payload": null,
+      "story": null,
+      "items": null,
+      "contact": null,
+      "product": null,
+      "catalog": null,
+      "order": null,
+      "callPermissionReply": null
+    },
+    "receivedAt": "2026-11-19T00:00:00Z",
+    "replyOutMessageId": null,
+    "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null,
+    "lastMessage": null
+  },
+  {
+    "id": 103,
+    "subject": "test-sender",
+    "subjectId": 78,
+    "subscriber": {
+      "id": 999,
+      "identifier": "12345678901234567",
+      "identifiers": [
+        {
+          "type": "TELEGRAM_USERNAME",
+          "value": "test_user"
+        },
+        {
+          "type": "TELEGRAM_ID",
+          "value": "12345678901234567"
+        }
+      ]
+    },
+    "userInfo": null,
+    "messageContent": {
+      "type": "DOCUMENT",
+      "attachment": {
+        "url": "https://app.edna.ru/edna.b1/adapter-telegram/6/2026-11-19/synthetic-2.pdf",
+        "name": "example-2.pdf",
+        "size": 803773
+      },
+      "location": null,
+      "referral": null,
+      "caption": "",
+      "text": null,
+      "payload": null,
+      "story": null,
+      "items": null,
+      "contact": null,
+      "product": null,
+      "catalog": null,
+      "order": null,
+      "callPermissionReply": null
+    },
+    "receivedAt": "2026-11-19T00:00:00Z",
+    "replyOutMessageId": null,
+    "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null,
+    "lastMessage": null
+  },
+  {
+    "id": 104,
+    "subject": "test-sender",
+    "subjectId": 78,
+    "subscriber": {
+      "id": 999,
+      "identifier": "12345678901234567",
+      "identifiers": [
+        {
+          "type": "TELEGRAM_USERNAME",
+          "value": "test_user"
+        },
+        {
+          "type": "TELEGRAM_ID",
+          "value": "12345678901234567"
+        }
+      ]
+    },
+    "userInfo": null,
+    "messageContent": {
+      "type": "DOCUMENT",
+      "attachment": {
+        "url": "https://app.edna.ru/edna.b1/adapter-telegram/6/2026-11-19/synthetic-3.pdf",
+        "name": "example-3.pdf",
+        "size": 50825835
+      },
+      "location": null,
+      "referral": null,
+      "caption": "подпись к файлу",
+      "text": null,
+      "payload": null,
+      "story": null,
+      "items": null,
+      "contact": null,
+      "product": null,
+      "catalog": null,
+      "order": null,
+      "callPermissionReply": null
+    },
+    "receivedAt": "2026-11-19T00:00:00Z",
+    "replyOutMessageId": null,
+    "replyOutMessageExternalRequestId": null,
+    "replyInMessageId": null,
+    "lastMessage": null
+  }
+]

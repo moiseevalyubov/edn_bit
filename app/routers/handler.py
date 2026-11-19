@@ -19,7 +19,7 @@ from app.services.delivery_worker import enqueue_outgoing
 from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
 from app.services import telegram
-from app.services.telegram_delivery import accept_outgoing as accept_telegram_outgoing
+from app.services.telegram_delivery import accept_outgoing_with_media as accept_telegram_outgoing
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -167,7 +167,7 @@ async def handler(request: Request, db: Session = Depends(get_db)):
         # Durable id-based dedup replaces the legacy pre-commit replay fingerprint
         # for Telegram: a failed DB write must remain retryable.
         try:
-            accept_telegram_outgoing(db, portal, data)
+            await accept_telegram_outgoing(db, portal, data)
         except telegram.TelegramError as exc:
             db.rollback()
             logger.warning("Telegram operator event rejected: portal=%s code=%s", portal.id, str(exc))
