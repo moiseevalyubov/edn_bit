@@ -16,6 +16,7 @@ from app.config import settings
 from app.models import Channel, Message, MessageDeliveryTask, Portal
 from app.services import telegram as tg
 from app.services import telegram_files
+from app.services import file_cache
 from app.services.crm_locks import operation_lock
 from app.services.sanitize import sanitize_name, sanitize_text
 
@@ -430,6 +431,15 @@ async def execute_task(task_id, session_factory):
                     if payload.get("file_key"):
                         media_url = telegram_files.signed_url(db, payload["file_key"], message.id)
                         entry = telegram_files.get(db, payload["file_key"], message.id)
+                        if settings.telegram_media_legacy_cache_channel_id == channel.id:
+                            ext = payload["file_key"].rsplit(".", 1)[-1]
+                            cache_key = file_cache.store(entry.content, entry.content_type, ext)
+                            media_url = file_cache.make_signed_url(cache_key)
+                            logger.info("Telegram outgoing file route: channel=%s message_id=%s mode=legacy_cache",
+                                        channel.id, message.id)
+                        else:
+                            logger.info("Telegram outgoing file route: channel=%s message_id=%s mode=durable",
+                                        channel.id, message.id)
                         stem, dot, ext = entry.name.rpartition(".")
                         media_name = stem[:24 - len(ext)] + dot + ext if dot else entry.name[:25]
                     payload["attempt_started"] = True

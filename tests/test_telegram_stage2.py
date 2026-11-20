@@ -16,6 +16,7 @@ import httpx
 from sqlalchemy.exc import IntegrityError
 
 from test_telegram_stage1 import TelegramFixture
+from app.config import settings
 from app.models import Message, MessageDeliveryTask, TelegramFile
 from app.routers import files
 from app.services import telegram as tg, telegram_files as media, delivery_worker as worker
@@ -25,6 +26,27 @@ PDF = b"%PDF-1.7\nsynthetic fixture\n%%EOF"
 
 
 class MediaCase(TelegramFixture):
+    async def test_legacy_cache_probe_is_channel_scoped_and_preserves_durable_file(self):
+        self.app.include_router(files.router)
+        for index, selected in enumerate((self.channel_id, self.channel_id + 1000, 0)):
+            with self.subTest(selected=selected):
+                event = await self.file_event(message_id=str(700 + index))
+                with patch.object(media, "download", AsyncMock(return_value=(PDF, "application/pdf"))):
+                    self.assertEqual((await self.client.post("/handler", json=event)).status_code, 200)
+                with patch.object(settings, "telegram_media_legacy_cache_channel_id", selected), \
+                     patch.object(tg, "send_media", AsyncMock(return_value={})) as send:
+                    await worker._process_one_task()
+                self.assertEqual(send.await_count, 1)
+                url = send.call_args.args[4]
+                self.assertEqual("/file/tg-" in url, selected != self.channel_id)
+                response = await self.client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.content, PDF)
+                self.assertEqual(response.headers["content-type"], "application/pdf")
+                self.assertEqual("content-disposition" in response.headers, selected != self.channel_id)
+                with self.Session() as db:
+                    self.assertEqual(db.query(TelegramFile).count(), index + 1)
+
     async def test_outgoing_flush_conflict_rolls_back_and_allows_retry(self):
         await self.receive()
         await worker._process_one_task()

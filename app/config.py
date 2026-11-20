@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     crm_outreach_enabled: bool = False
     # Stage 1: Open Line text only. Never enables Telegram CRM providers.
     telegram_enabled: bool = False
+    # Temporary preprod comparison: only this channel serves outgoing Telegram
+    # bytes through the existing MAX memory cache. Zero disables the probe.
+    telegram_media_legacy_cache_channel_id: int = 0
     bitrix_expected_app_code: str = ""
 
     model_config = {"env_file": ".env"}
