@@ -18,6 +18,7 @@ from app.services.crm_providers import stage_provider
 from app.services.bitrix import activate_connector, bind_events, create_open_line, get_open_lines, register_connector
 from app.services.maxbot import WebhookSetupError, configure_incoming_webhook
 from app.services import telegram
+from app.services import whatsapp
 from app.services.crm_auth import check_admin_context
 from app.services.crm_bitrix import CrmBitrixError
 
@@ -93,6 +94,26 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
     channel_type = None
     setup_warnings = []
     async def prepare_new_type(profile):
+        if str(profile.get("type") or "").upper() == whatsapp.CHANNEL_TYPE:
+            await require_channel_admin(portal, db, authorization, always=True)
+            if not portal.app_token:
+                raise WebhookSetupError("Для WhatsApp Messenger нужно завершить обновление приложения: отсутствует application_token.")
+            try:
+                await check_admin_context(portal, db)
+                await whatsapp.prepare_connector(portal, db)
+            except (whatsapp.WhatsAppError, CrmBitrixError) as exc:
+                logger.warning("WhatsApp connector preparation failed: code=%s operation=%s remote_code=%s",
+                               exc.code, getattr(exc, "operation", None), getattr(exc, "remote_code", None))
+                raise WebhookSetupError("Не удалось подготовить WhatsApp Messenger. Проверьте авторизацию и общую Открытую линию.") from None
+            db.refresh(portal, with_for_update=True)
+            if portal.uninstalled_at is not None:
+                raise WebhookSetupError("Приложение было удалено во время подключения")
+            if db.query(Channel).filter(
+                Channel.portal_id == portal.id, Channel.is_active.is_(True),
+                (Channel.subject_id == profile.get("subjectId")) | (Channel.sender == body.sender),
+            ).first():
+                raise WebhookSetupError("Канал с таким Sender ID или Subject ID уже подключён к этому порталу")
+            return
         if str(profile.get("type") or "").upper() != "TELEGRAM":
             return
         await require_channel_admin(portal, db, authorization, always=True)
@@ -130,6 +151,11 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
         subject_id = info["subject_id"]
         channel_type = info.get("type")
         auto_configured = True
+        if str(channel_type or "").upper() == whatsapp.CHANNEL_TYPE:
+            if not portal.open_line_id:
+                setup_warnings.append("Канал сохранён. Выберите общую Открытую линию для приёма сообщений WhatsApp Messenger.")
+            if not info.get("status_configured"):
+                setup_warnings.append("Входящие настроены, но webhook статусов WhatsApp Messenger не подтверждён. Обратитесь в поддержку edna.")
         if str(channel_type or "").upper() == "TELEGRAM":
             if not portal.open_line_id:
                 setup_warnings.append("Канал сохранён. Выберите общую Открытую линию приложения для приёма сообщений Telegram.")
@@ -213,6 +239,8 @@ async def create_line(member_id: str, db: Session = Depends(get_db), authorizati
         await activate_connector(portal, db, line_id)
         if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
             await telegram.prepare_connector(portal, db, line_id)
+        if db.query(Channel).filter_by(portal_id=portal.id, channel_type=whatsapp.CHANNEL_TYPE, is_active=True).first():
+            await whatsapp.prepare_connector(portal, db, line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")
     portal.open_line_id = line_id
@@ -228,6 +256,8 @@ async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db), author
         await activate_connector(portal, db, body.line_id)
         if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
             await telegram.prepare_connector(portal, db, body.line_id)
+        if db.query(Channel).filter_by(portal_id=portal.id, channel_type=whatsapp.CHANNEL_TYPE, is_active=True).first():
+            await whatsapp.prepare_connector(portal, db, body.line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка активации коннектора: {e}")
     portal.open_line_id = body.line_id
@@ -247,6 +277,22 @@ async def prepare_telegram(body: dict, db: Session = Depends(get_db), authorizat
             await telegram.prepare_connector(portal, db)
     except (telegram.TelegramError, CrmBitrixError):
         raise HTTPException(503, "Не удалось восстановить Telegram. Проверьте авторизацию и Открытую линию") from None
+    return {"enabled": True, "admin": True}
+
+
+@router.post("/whatsapp/prepare")
+async def prepare_whatsapp(body: dict, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
+    portal = get_portal_or_404(body.get("member_id"), db)
+    if not db.query(Channel).filter_by(portal_id=portal.id, channel_type=whatsapp.CHANNEL_TYPE, is_active=True).first():
+        return {"enabled": False}
+    await require_channel_admin(portal, db, authorization, always=True)
+    if not portal.app_token:
+        raise HTTPException(409, "Для WhatsApp Messenger нужно завершить обновление приложения")
+    try:
+        await check_admin_context(portal, db)
+        await whatsapp.prepare_connector(portal, db)
+    except (whatsapp.WhatsAppError, CrmBitrixError):
+        raise HTTPException(503, "Не удалось восстановить WhatsApp Messenger. Проверьте авторизацию и Открытую линию") from None
     return {"enabled": True, "admin": True}
 
 

@@ -39,6 +39,8 @@ from app.services.delivery_worker import notify_outgoing_undelivered
 from app.services.rate_limiter import rate_limiter
 from app.services.crm_outreach import CrmRequestError, record_edna_status
 from app.services import telegram
+from app.services import whatsapp
+from app.services.whatsapp_delivery import accept_status as accept_whatsapp_status
 from app.services.telegram_delivery import accept_status as accept_telegram_status
 
 logger = logging.getLogger(__name__)
@@ -86,6 +88,19 @@ async def status_callback(webhook_token: str, request: Request, db: Session = De
         logger.error("Status: тело не является JSON-объектом")
         if not channel.is_active:
             return JSONResponse({"error": "forbidden"}, status_code=403)
+        return _ok()
+
+    if whatsapp.is_whatsapp(channel):
+        whatsapp.log_payload("status", data, channel.id)
+        try:
+            accept_whatsapp_status(db, channel, data)
+        except whatsapp.WhatsAppError as exc:
+            db.rollback()
+            return JSONResponse({"error": exc.code}, status_code=503 if exc.retryable else 422)
+        except Exception:
+            db.rollback()
+            whatsapp.log_exception("WhatsApp status could not be persisted: channel=%s", channel.id)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
         return _ok()
 
     if telegram.is_telegram(channel):

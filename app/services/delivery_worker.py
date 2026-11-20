@@ -27,6 +27,8 @@ from app.services.task_types import SEND_CRM_TO_EDNA, SEND_TO_BITRIX, SEND_TO_ED
 from app.services.crm_worker import execute_crm_task
 from app.services.crm_providers import execute_provider_task, reconcile_local_providers
 from app.services import telegram, telegram_files
+from app.services import whatsapp
+from app.services.whatsapp_delivery import execute_task as execute_whatsapp_task, recover_task as recover_whatsapp_task
 from app.services.telegram_delivery import execute_task as execute_telegram_task, recover_task as recover_telegram_task
 from app.services.crm_locks import operation_lock
 
@@ -390,6 +392,9 @@ async def _process_one_task() -> bool:
     if task_type in telegram.TASK_TYPES:
         await execute_telegram_task(task_id, SessionLocal)
         return True
+    if task_type in whatsapp.TASK_TYPES:
+        await execute_whatsapp_task(task_id, SessionLocal)
+        return True
     if task_type == SYNC_CRM_PROVIDER:
         await execute_provider_task(task_id, SessionLocal)
         return True
@@ -460,7 +465,19 @@ async def _reset_stale_tasks() -> None:
             .all()
         )
         for t in stale:
-            if t.task_type in telegram.TASK_TYPES:
+            if t.task_type in whatsapp.TASK_TYPES:
+                try:
+                    message_id = json.loads(t.payload).get("message_id")
+                    with operation_lock(db.get_bind(), message_id, namespace=221911270) as acquired:
+                        if not acquired:
+                            continue
+                        db.refresh(t)
+                        if t.status != "processing" or t.updated_at >= cutoff:
+                            continue
+                        recover_whatsapp_task(db, t)
+                except (ValueError, TypeError, AttributeError):
+                    t.status, t.last_error = "failed", "invalid_whatsapp_task"
+            elif t.task_type in telegram.TASK_TYPES:
                 try:
                     message_id = json.loads(t.payload).get("message_id")
                     with operation_lock(db.get_bind(), message_id, namespace=221911260) as acquired:

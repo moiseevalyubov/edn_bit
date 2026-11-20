@@ -19,7 +19,9 @@ from app.services.delivery_worker import enqueue_outgoing
 from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
 from app.services import telegram
-from app.services.crm_auth import has_telegram_channel
+from app.services import whatsapp
+from app.services.whatsapp_delivery import accept_outgoing as accept_whatsapp_outgoing
+from app.services.crm_auth import has_telegram_channel, has_whatsapp_channel
 from app.services.telegram_delivery import accept_outgoing_with_media as accept_telegram_outgoing
 
 logger = logging.getLogger(__name__)
@@ -83,7 +85,7 @@ def _parse_php_form(flat: dict) -> dict:
 
 
 def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
-    if settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db):
+    if settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db) or has_whatsapp_channel(portal, db):
         # Event OAuth belongs to the initiating employee. Preserve the admin
         # installation credentials required by provider management.
         return
@@ -160,6 +162,22 @@ async def handler(request: Request, db: Session = Depends(get_db)):
         logger.warning("Handler: portal %s has no app_token stored — skipping token check", member_id)
 
     event_data = data.get("data") if isinstance(data.get("data"), dict) else {}
+    if event_data.get("CONNECTOR") == whatsapp.CONNECTOR:
+        if not portal.app_token:
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if event != "ONIMCONNECTORMESSAGEADD":
+            return JSONResponse({"status": "ok"})
+        try:
+            accept_whatsapp_outgoing(db, portal, data)
+        except whatsapp.WhatsAppError as exc:
+            db.rollback()
+            logger.warning("WhatsApp operator event rejected: portal=%s code=%s", portal.id, exc.code)
+            return JSONResponse({"error": exc.code}, status_code=503 if exc.retryable else 422)
+        except Exception:
+            db.rollback()
+            whatsapp.log_exception("WhatsApp operator event could not be persisted: portal=%s", portal.id)
+            return JSONResponse({"error": "service_unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
     if event_data.get("CONNECTOR") == telegram.CONNECTOR:
         if not portal.app_token:
             return JSONResponse({"error": "forbidden"}, status_code=403)
@@ -276,8 +294,8 @@ async def _handle_outgoing_message(data: dict, portal: Portal, db: Session) -> N
             channel = db.query(Channel).filter_by(
                 portal_id=portal.id, sender=sender, is_active=True
             ).first()
-            if channel and telegram.is_telegram(channel):
-                logger.warning("Legacy event cannot use Telegram channel %s", channel.id)
+            if channel and (telegram.is_telegram(channel) or whatsapp.is_whatsapp(channel)):
+                logger.warning("Legacy event cannot use isolated messenger channel %s", channel.id)
                 continue
             if not channel:
                 logger.warning(

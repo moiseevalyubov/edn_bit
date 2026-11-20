@@ -380,6 +380,14 @@ function prepareTelegram() {
     }); }).catch(function(error) { showFormError(error.message); });
 }
 
+function prepareWhatsApp() {
+  return fetch('/api/whatsapp/prepare', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
+    .then(function(r) { return r.json().then(function(data) {
+      if (!r.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Не удалось подготовить WhatsApp Messenger');
+      if (data.enabled && data.admin) crmAdmin = true;
+    }); }).catch(function(error) { showFormError(error.message); });
+}
+
 function refreshCrmDiagnostics() {
   if (!crmAdmin) return;
   fetch('/api/crm/diagnostics', {method: 'POST', headers: appHeaders(), body: JSON.stringify({member_id: memberId})})
@@ -433,7 +441,7 @@ BX24.init(function() {
     }
     loadOpenLines();
     loadPortalStatus();
-    loadChannels(prepareCrm().then(prepareTelegram));
+    loadChannels(prepareCrm().then(prepareTelegram).then(prepareWhatsApp));
   });
 });
 

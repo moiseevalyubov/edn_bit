@@ -12,6 +12,7 @@ from app.services.bitrix import activate_connector, bind_events, register_connec
 from app.services.crm_auth import require_channel_admin
 from app.services.crm_providers import stage_portal
 from app.services import telegram
+from app.services import whatsapp
 from app.models import Channel
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,12 @@ async def install(request: Request, db: Session = Depends(get_db)):
             await telegram.prepare_connector(portal, db)
         except Exception:
             telegram.log_exception("Telegram post-install setup incomplete: portal_id=%s", portal.id)
+
+    if db.query(Channel).filter_by(portal_id=portal.id, channel_type=whatsapp.CHANNEL_TYPE, is_active=True).first():
+        try:
+            await whatsapp.prepare_connector(portal, db)
+        except Exception:
+            whatsapp.log_exception("WhatsApp post-install setup incomplete: portal_id=%s", portal.id)
 
     return HTMLResponse("""
 <!DOCTYPE html>

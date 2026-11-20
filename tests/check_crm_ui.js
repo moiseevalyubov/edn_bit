@@ -37,6 +37,10 @@ async function main() {
   assert.equal(document.getElementById('crmNotice').textContent, '');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer synthetic-ui-token');
   assert.ok(!JSON.stringify(calls).includes('never-forward-refresh'));
+  await context.prepareWhatsApp();
+  const whatsappPreparation = calls.find(call => call.url === '/api/whatsapp/prepare');
+  assert.equal(whatsappPreparation.options.headers.Authorization, 'Bearer synthetic-ui-token');
+  assert.deepEqual(JSON.parse(whatsappPreparation.options.body), {member_id: 'test-portal'});
   context.crmAdmin = false;
   context.renderChannels([{id: 9, name: 'Existing name', connected_at: '2026-11-05', is_active: true, channel_type: 'MAX'}]);
   assert.ok(document.getElementById('channelsList').innerHTML.includes('Переименовать'));
@@ -61,7 +65,7 @@ async function main() {
   assert.equal(renders, 0, 'No intermediate channel list before permissions are checked');
   assert.equal(calls.filter(call => call.url.startsWith('/api/channels?')).length, 1);
   resolvePreparation({ok: true, json: () => Promise.resolve({state: 'ready', enabled: true, providers: []})});
-  for (let i = 0; i < 15; i++) await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve)); // Let all connector preparations settle.
   assert.equal(renders, 1, 'The initial channel list renders once');
   assert.equal(document.getElementById('loading').style.display, 'none');
   for (const reply of [
@@ -76,7 +80,7 @@ async function main() {
       json: () => Promise.resolve(url === '/api/crm/prepare' ? reply.data : []),
     });
     initialize();
-    for (let i = 0; i < 25; i++) await Promise.resolve();
+    await new Promise(resolve => setImmediate(resolve));
     assert.equal(renders, 1, 'Legacy mode and preparation failure must still show the form once');
     if (!reply.ok) assert.equal(document.getElementById('crmNotice').textContent, 'Preparation unavailable');
   }

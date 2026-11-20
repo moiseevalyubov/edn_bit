@@ -65,9 +65,14 @@ def has_telegram_channel(portal, db):
     return db.query(Channel.id).filter_by(portal_id=portal.id, channel_type="TELEGRAM").first() is not None
 
 
+def has_whatsapp_channel(portal, db):
+    # Disconnected channels still need trusted installation credentials for receipts.
+    return db.query(Channel.id).filter_by(portal_id=portal.id, channel_type="WHATSAPP_MESSENGER").first() is not None
+
+
 async def require_channel_admin(portal, db, authorization: str | None, *, always=False, allow_uninstalled=False, allow_installing=False):
     # Preserve existing installations when the feature has never been enabled.
-    if not (always or settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db)):
+    if not (always or settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db) or has_whatsapp_channel(portal, db)):
         return
     token = bearer_token(authorization)
     try:

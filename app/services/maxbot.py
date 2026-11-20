@@ -351,10 +351,11 @@ async def configure_incoming_webhook(
     # fails, the caller can still store what we know (see WebhookSetupError).
     channel_type = match.get("type")
 
-    if str(channel_type or "").upper() == "TELEGRAM":
-        channel_type = "TELEGRAM"
+    if str(channel_type or "").upper() in {"TELEGRAM", "WHATSAPP_MESSENGER"}:
+        channel_type = str(channel_type).upper()
         if not manual and match.get("active") is not True:
-            raise WebhookSetupError("Канал Telegram не активен в edna.")
+            label = "Telegram" if channel_type == "TELEGRAM" else "WhatsApp Messenger"
+            raise WebhookSetupError("Канал " + label + " не активен в edna.")
         if prepare_channel is not None:
             await prepare_channel(match)
 
