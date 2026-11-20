@@ -145,6 +145,7 @@ async def accept_incoming_with_media(db, channel, data):
             if declared is not None and len(content) != declared:
                 raise tg.TelegramError("media_size_mismatch")
             name = attachment.get("name")
+            telegram_files.log_metadata("incoming", channel.id, message.id, content, mime, name)
             actual_type = telegram_files.inspect_file(content, mime, name)[0]
             if expected_type == "IMAGE" and actual_type != "IMAGE":
                 raise tg.TelegramError("media_type_mismatch")
@@ -259,6 +260,7 @@ async def accept_outgoing_with_media(db, portal, data):
             # CDN support requires a verified source, never an arbitrary URL.
             endpoint = urlsplit(portal.client_endpoint)
             content, mime = await telegram_files.download(url, {endpoint.hostname})
+            telegram_files.log_metadata("outgoing", message.channel_id, message.id, content, mime, name)
             key, media_type = telegram_files.store(db, message, content, mime, name)
             message.content_type = media_type
             payload = json.loads(task.payload)

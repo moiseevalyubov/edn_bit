@@ -24,6 +24,21 @@ PDF = b"%PDF-1.7\nsynthetic fixture\n%%EOF"
 
 
 class MediaCase(TelegramFixture):
+    async def test_incoming_jpeg_alias_is_stored_with_canonical_mime(self):
+        payload = self.incoming_media(kind="IMAGE")
+        image = b"\xff\xd8\xff\xd9"
+        payload["messageContent"]["attachment"].update(name="photo.jpg", size=len(image))
+        with patch.object(media, "download", AsyncMock(return_value=(image, "image/jpg"))):
+            response = await self.client.post("/incoming/tg-token", json=payload)
+        self.assertEqual(response.status_code, 200, response.text)
+        with self.Session() as db:
+            entry = db.query(TelegramFile).one()
+            self.assertEqual(entry.content_type, "image/jpeg")
+        await worker._process_one_task()
+        sent = self.bitrix.call_args.args[3]["MESSAGES"][0]["message"]
+        self.assertEqual(sent["files"][0]["name"], "photo.jpg")
+        self.assertNotIn("не удалось", sent["text"])
+
     def incoming_media(self, *, kind="DOCUMENT", caption="Подпись", size=None):
         payload = self.payload()
         payload["messageContent"] = {"type": kind, "attachment": {
@@ -204,6 +219,26 @@ class MediaCase(TelegramFixture):
 
 
 class MediaValidationTests(unittest.IsolatedAsyncioTestCase):
+    def test_jpeg_mime_aliases_whitespace_and_generic_binary_headers(self):
+        image = b"\xff\xd8\xff\xd9"
+        for mime in ("image/jpg", "image/pjpeg", " Image/JPEG ; charset=binary", "binary/octet-stream", "application/binary", "application/x-binary", "", None):
+            with self.subTest(mime=mime):
+                self.assertEqual(media.inspect_file(image, mime, "photo.jpg"), ("IMAGE", "image/jpeg", "jpg"))
+        for mime, name in (("image/png", "photo.jpg"), ("image/jpeg", "photo.png"), ("text/html", "photo.jpg")):
+            with self.subTest(mime=mime, name=name), self.assertRaises(tg.TelegramError):
+                media.inspect_file(image, mime, name)
+        with self.assertRaises(tg.TelegramError):
+            media.inspect_file(b"<html>error</html>", "image/jpg", "photo.jpg")
+
+    def test_metadata_log_explains_mismatch_without_file_secrets(self):
+        with self.assertLogs("app.services.telegram_files", level="INFO") as logs:
+            media.log_metadata("incoming", 15, 272, b"\xff\xd8\xff\xd9", "image/jpg; token=synthetic-private", "private-name.jpg")
+        output = " ".join(logs.output)
+        for field in ("declared_mime=image/jpg", "detected_image=image/jpeg", "extension=jpg", "bytes=4"):
+            self.assertIn(field, output)
+        self.assertNotIn("synthetic-private", output)
+        self.assertNotIn("private-name", output)
+
     def test_successful_download_uses_verified_tls_host_with_pinned_public_ip(self):
         class FakeSocket:
             def __init__(self):

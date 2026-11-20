@@ -4,6 +4,7 @@ import codecs
 from datetime import datetime, timedelta
 import http.client
 import ipaddress
+import logging
 import re
 import socket
 import ssl
@@ -21,6 +22,42 @@ from app.services.file_cache import make_signed_url
 MAX_BYTES = 64 * 1024 * 1024
 RETENTION = timedelta(days=7)
 DOWNLOAD_SECONDS = 120
+logger = logging.getLogger(__name__)
+
+
+def normalize_mime(mime):
+    value = mime.split(";", 1)[0].strip().lower() if isinstance(mime, str) else ""
+    return {
+        "image/jpg": "image/jpeg", "image/pjpeg": "image/jpeg", "image/x-png": "image/png",
+        "": "application/octet-stream", "binary/octet-stream": "application/octet-stream",
+        "application/binary": "application/octet-stream", "application/x-binary": "application/octet-stream",
+    }.get(value, value)
+
+
+def image_format(content):
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png", "png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg", "jpg"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif", "gif"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp", "webp"
+    return None
+
+
+def log_metadata(direction, channel_id, message_id, content, mime, name):
+    # No URL, filename, parameters or body bytes in diagnostics.
+    declared = mime.split(";", 1)[0].strip().lower() if isinstance(mime, str) else ""
+    if not re.fullmatch(r"[a-z0-9.+_-]{1,40}/[a-z0-9.+_-]{1,40}", declared):
+        declared = "missing-or-invalid"
+    ext = name.rsplit(".", 1)[-1].lower() if isinstance(name, str) and "." in name else ""
+    if not re.fullmatch(r"[a-z0-9]{1,10}", ext):
+        ext = "other"
+    detected = image_format(content)
+    logger.info("Telegram %s file metadata: channel=%s message_id=%s declared_mime=%s detected_image=%s extension=%s bytes=%s",
+                direction, channel_id, message_id, declared, detected[0] if detected else "not-recognized",
+                ext, len(content))
 
 
 def source(url, allowed_hosts):
@@ -123,16 +160,8 @@ def inspect_file(content, mime, name):
     if not isinstance(name, str) or not name or len(name) > 255 or re.search(r'[\x00-\x1f\x7f/\\<>]', name):
         raise tg.TelegramError("media_invalid_name")
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-    mime = mime.lower().split(";")[0]
-    detected = None
-    if content.startswith(b"\x89PNG\r\n\x1a\n"):
-        detected = ("image/png", "png")
-    elif content.startswith(b"\xff\xd8\xff"):
-        detected = ("image/jpeg", "jpg")
-    elif content.startswith((b"GIF87a", b"GIF89a")):
-        detected = ("image/gif", "gif")
-    elif content.startswith(b"RIFF") and content[8:12] == b"WEBP":
-        detected = ("image/webp", "webp")
+    mime = normalize_mime(mime)
+    detected = image_format(content)
     if detected:
         actual, extension = detected
         if mime not in {actual, "application/octet-stream"} or ext not in {extension, "jpeg" if extension == "jpg" else extension}:
