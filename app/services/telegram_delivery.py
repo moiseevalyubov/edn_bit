@@ -75,6 +75,18 @@ def _time(value):
     return datetime.utcnow()
 
 
+def _dialog_title(message):
+    if not _has_client_name(message):
+        return "Telegram " + message.subscriber_identifier
+    return " ".join(value for value in (message.user_name, message.user_last_name) if value)
+
+
+def _has_client_name(message):
+    # Legacy queued messages also store our generated title in user_name.
+    # It is a chat label, never a person's name for the CRM tracker.
+    return bool(message.user_name and message.user_name != "Telegram " + message.subscriber_identifier)
+
+
 def accept_incoming(db, channel, data, *, media_jobs=None):
     if not channel.is_active or not channel.portal or channel.portal.uninstalled_at is not None:
         raise tg.TelegramError("channel_unavailable")
@@ -91,9 +103,15 @@ def accept_incoming(db, channel, data, *, media_jobs=None):
                                           subscriber_identifier=address).order_by(Message.id.desc()).first()
     name = sanitize_name(user.get("firstName") or user.get("displayName") or user.get("userName"))
     username = tg.incoming_username(data)
-    name_source = "userInfo" if name else "TELEGRAM_USERNAME" if username else "history" if previous and previous.user_name else "identifier"
-    name = name or username or (previous.user_name if previous else None) or ("Telegram " + address)
-    last_name = sanitize_name(user.get("lastName")) or (previous.user_last_name if previous else None)
+    if username:
+        name, last_name, name_source = username, None, "TELEGRAM_USERNAME"
+    elif name:
+        # Do not attach a surname from an older, different display identity.
+        last_name, name_source = sanitize_name(user.get("lastName")) or None, "userInfo"
+    elif previous and previous.user_name:
+        name, last_name, name_source = previous.user_name, previous.user_last_name, "history"
+    else:
+        name, last_name, name_source = "Telegram " + address, None, "identifier"
     name = name.replace("[", "［").replace("]", "］")
     last_name = last_name.replace("[", "［").replace("]", "］") if last_name else None
     content = data.get("messageContent")
@@ -333,9 +351,11 @@ async def _deliver(db, message, phone=None, *, notice=None, file_key=None):
     portal = channel.portal
     if portal.uninstalled_at is not None:
         raise tg.TelegramError("portal_uninstalled")
-    user = {"id": message.subscriber_user_id, "name": message.user_name}
-    if message.user_last_name:
-        user["last_name"] = message.user_last_name
+    user = {"id": message.subscriber_user_id}
+    if _has_client_name(message):
+        user["name"] = message.user_name
+        if message.user_last_name:
+            user["last_name"] = message.user_last_name
     if phone:
         user["phone"] = phone  # No skip_phone_validate and no invented phone.
     content = {"id": "tg:%s:%s" % (channel.subject_id, message.max_message_id),
@@ -358,7 +378,7 @@ async def _deliver(db, message, phone=None, *, notice=None, file_key=None):
         }.get(notice, "Сообщение не доставлено клиенту в Telegram. Обратитесь в поддержку edna.")
     await tg.bitrix_call(portal, db, "imconnector.send.messages", {
         "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id),
-        "MESSAGES": [{"user": user, "chat": {"id": tg.chat_id(channel, message.subscriber_identifier), "name": message.user_name},
+        "MESSAGES": [{"user": user, "chat": {"id": tg.chat_id(channel, message.subscriber_identifier), "name": _dialog_title(message)},
                       "message": content}],
     })
 
@@ -409,7 +429,7 @@ async def execute_task(task_id, session_factory):
                         subscriber_identifier=message.subscriber_identifier, line_id=message.line_id).order_by(Message.id.desc()).first()
                     # A queued older rename must not overwrite a newer username.
                     if latest and (latest.user_name, latest.user_last_name) == (message.user_name, message.user_last_name):
-                        title = " ".join(value for value in (message.user_name, message.user_last_name) if value)
+                        title = _dialog_title(message)
                         await tg.bitrix_call(channel.portal, db, "imconnector.chat.name.set", {
                             "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id),
                             "CHAT_ID": tg.chat_id(channel, message.subscriber_identifier), "NAME": title,

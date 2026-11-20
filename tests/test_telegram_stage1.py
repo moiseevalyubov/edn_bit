@@ -210,13 +210,15 @@ class TelegramCase(TelegramFixture):
             self.assertEqual(message.user_name, 'demo_customer')
             self.assertEqual(message.subscriber_identifier, '12345678901234567')
 
-    async def test_real_name_has_priority_and_username_change_does_not_change_identity(self):
+    async def test_username_has_priority_over_real_name_and_keeps_identity(self):
         data = self.payload()
         data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': 'old_username'})
         self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
         await worker._process_one_task()
         first = self.bitrix.call_args.args[3]['MESSAGES'][0]
-        self.assertEqual(first['user']['name'], 'Test')
+        self.assertEqual(first['user']['name'], 'old_username')
+        self.assertNotIn('last_name', first['user'])
+        self.assertEqual(first['chat']['name'], 'old_username')
         data['id'], data['userInfo'] = '102', None
         data['subscriber']['identifiers'][-1]['value'] = 'new_username'
         self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
@@ -225,6 +227,70 @@ class TelegramCase(TelegramFixture):
         self.assertEqual(second['user']['name'], 'new_username')
         self.assertEqual(first['user']['id'], second['user']['id'])
         self.assertEqual(first['chat']['id'], second['chat']['id'])
+
+    async def test_missing_name_with_phone_does_not_send_placeholder_to_crm_user(self):
+        data = self.payload()
+        data['userInfo'] = None
+        data['subscriber']['identifiers'].append({'type': 'PHONE', 'value': '79990000001'})
+        for message_id in ('101', '102'):
+            data['id'] = message_id
+            self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+            await worker._process_one_task()
+            forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
+            self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567', 'phone': '+79990000001'})
+            self.assertEqual(forwarded['chat']['name'], 'Telegram 12345678901234567')
+            self.assertNotIn('disable_crm', forwarded['message'])
+        self.assertEqual(self.rows(tg.RENAME), [])
+
+    async def test_legacy_queued_placeholder_is_also_kept_out_of_user_name(self):
+        data = self.payload()
+        data['userInfo'] = None
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        # A pre-fix task has the same stored Message shape and no new metadata.
+        with self.Session() as db:
+            message = db.query(Message).one()
+            self.assertEqual(message.user_name, 'Telegram 12345678901234567')
+            message.user_last_name = '12345678901234567'
+            db.commit()
+        await worker._process_one_task()
+        forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567'})
+        self.assertEqual(forwarded['chat']['name'], 'Telegram 12345678901234567')
+
+    async def test_real_name_title_is_same_for_initial_delivery_and_rename(self):
+        data = self.payload()
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        self.assertEqual(self.bitrix.call_args.args[3]['MESSAGES'][0]['chat']['name'], 'Test User')
+        data['id'], data['userInfo'] = '102', {'firstName': 'New', 'lastName': 'Person'}
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        title = self.bitrix.call_args.args[3]['MESSAGES'][0]['chat']['name']
+        self.assertEqual(title, 'New Person')
+        await worker._process_one_task()
+        self.assertEqual(self.bitrix.call_args.args[2], 'imconnector.chat.name.set')
+        self.assertEqual(self.bitrix.call_args.args[3]['NAME'], title)
+
+    async def test_later_username_removes_old_surname_and_never_degrades_when_missing(self):
+        await self.receive()
+        await worker._process_one_task()
+        data = self.payload(message_id='102')
+        data['subscriber']['identifiers'].append({'type': 'TELEGRAM_USERNAME', 'value': '@demo_customer'})
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(forwarded['chat']['name'], 'demo_customer')
+        self.assertNotIn('last_name', forwarded['user'])
+        await worker._process_one_task()
+        self.assertEqual(self.bitrix.call_args.args[3]['NAME'], 'demo_customer')
+        data['id'], data['userInfo'] = '103', None
+        data['subscriber']['identifiers'].pop()
+        self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
+        await worker._process_one_task()
+        forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
+        self.assertEqual(forwarded['chat']['name'], 'demo_customer')
+        self.assertEqual(forwarded['user']['name'], 'demo_customer')
+        self.assertNotIn('last_name', forwarded['user'])
 
     async def test_missing_username_uses_same_channel_history(self):
         data = self.payload()
