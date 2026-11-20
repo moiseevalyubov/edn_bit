@@ -13,9 +13,10 @@ from zipfile import ZipFile
 from pathlib import Path
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 
 from test_telegram_stage1 import TelegramFixture
-from app.models import Message, TelegramFile
+from app.models import Message, MessageDeliveryTask, TelegramFile
 from app.routers import files
 from app.services import telegram as tg, telegram_files as media, delivery_worker as worker
 from app.services.file_cache import make_signed_url, store as cache_store
@@ -24,6 +25,51 @@ PDF = b"%PDF-1.7\nsynthetic fixture\n%%EOF"
 
 
 class MediaCase(TelegramFixture):
+    async def test_outgoing_flush_conflict_rolls_back_and_allows_retry(self):
+        await self.receive()
+        await worker._process_one_task()
+        original_flush = self.Session.class_.flush
+        def conflict(db, *args, **kwargs):
+            if any(isinstance(row, MessageDeliveryTask) and row.task_type == tg.SEND for row in db.new):
+                raise IntegrityError("synthetic duplicate", {}, Exception("duplicate"))
+            return original_flush(db, *args, **kwargs)
+        with patch.object(self.Session.class_, "flush", new=conflict):
+            response = await self.client.post("/handler", json=self.event())
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"], "telegram_commit_conflict")
+        self.assertEqual(self.rows(tg.SEND), [])
+        with self.Session() as db:
+            self.assertEqual(db.query(Message).filter_by(direction="outgoing").count(), 0)
+        self.assertEqual((await self.client.post("/handler", json=self.event())).status_code, 200)
+        self.assertEqual(len(self.rows(tg.SEND)), 1)
+
+    async def test_incoming_location_matches_max_map_format_and_is_deduplicated(self):
+        payload = self.payload()
+        payload["messageContent"] = {"type": "LOCATION", "attachment": None, "caption": None, "text": None,
+                                     "location": {"longitude": 37.61012345678901, "latitude": 55.75012345678901, "address": None}}
+        with patch.object(media, "download", AsyncMock()) as download:
+            for _ in range(2):
+                self.assertEqual((await self.client.post("/incoming/tg-token", json=payload)).status_code, 200)
+            download.assert_not_awaited()
+        self.assertEqual(len(self.rows(tg.RECEIVE)), 1)
+        await worker._process_one_task()
+        sent = self.bitrix.call_args.args[3]["MESSAGES"][0]
+        self.assertEqual(sent["message"]["text"], "📍 Местоположение: https://yandex.ru/maps/?pt=37.61012345678901,55.75012345678901&z=16&l=map")
+        self.assertNotIn("files", sent["message"])
+        self.assertNotIn("disable_crm", sent["message"])
+        with self.Session() as db:
+            self.assertEqual(db.query(Message).filter_by(direction="incoming").one().content_type, "LOCATION")
+
+    async def test_invalid_location_is_visible_and_keeps_caption(self):
+        payload = self.payload()
+        payload["messageContent"] = {"type": "LOCATION", "caption": "Подпись", "location": {"latitude": 91, "longitude": 37}}
+        self.assertEqual((await self.client.post("/incoming/tg-token", json=payload)).status_code, 200)
+        await worker._process_one_task()
+        text = self.bitrix.call_args.args[3]["MESSAGES"][0]["message"]["text"]
+        self.assertIn("Подпись", text)
+        self.assertIn("без корректных координат", text)
+        self.assertNotIn("yandex.ru", text)
+
     async def test_incoming_jpeg_alias_is_stored_with_canonical_mime(self):
         payload = self.incoming_media(kind="IMAGE")
         image = b"\xff\xd8\xff\xd9"
@@ -219,6 +265,20 @@ class MediaCase(TelegramFixture):
 
 
 class MediaValidationTests(unittest.IsolatedAsyncioTestCase):
+    def test_location_zero_boundaries_and_safe_address(self):
+        self.assertEqual(tg.location_text({"latitude": 0, "longitude": 0}),
+                         "📍 Местоположение: https://yandex.ru/maps/?pt=0,0&z=16&l=map")
+        self.assertEqual(tg.location_text({"latitude": "-90.00", "longitude": "180.0", "address": "Адрес"}),
+                         "📍 Адрес\nhttps://yandex.ru/maps/?pt=180,-90&z=16&l=map")
+        text = tg.location_text({"latitude": 55, "longitude": 37, "address": "<script>bad()</script>[url=bad]Адрес[/url]"})
+        self.assertNotIn("<script>", text)
+        self.assertNotIn("[url", text)
+        for value in (None, True, {}, float("nan"), float("inf"), "NaN", "1e9999999", "55&url=bad", 91):
+            with self.subTest(value=value):
+                self.assertIsNone(tg.location_text({"latitude": value, "longitude": 37}))
+        self.assertIsNone(tg.location_text(None))
+        self.assertIsNone(tg.location_text({"latitude": 55, "longitude": -181}))
+
     def test_jpeg_mime_aliases_whitespace_and_generic_binary_headers(self):
         image = b"\xff\xd8\xff\xd9"
         for mime in ("image/jpg", "image/pjpeg", " Image/JPEG ; charset=binary", "binary/octet-stream", "application/binary", "application/x-binary", "", None):

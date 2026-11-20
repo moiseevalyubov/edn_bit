@@ -1,5 +1,6 @@
 """Explicit Telegram contract. Incoming fixtures require live edna validation."""
 import hashlib
+from decimal import Decimal, InvalidOperation
 import logging
 import re
 import sys
@@ -26,6 +27,34 @@ NOTICE = "telegram_notice"
 RENAME = "telegram_rename"
 TASK_TYPES = frozenset({RECEIVE, SEND, STATUS, NOTICE, RENAME})
 FAILURES = frozenset({"FAILED", "UNDELIVERED", "CANCELLED", "EXPIRED"})
+
+
+def location_text(location):
+    """Same Yandex Maps presentation as MAX; only validated numeric coordinates."""
+    if not isinstance(location, dict):
+        return None
+    coordinates = []
+    for field, limit in (("latitude", 90), ("longitude", 180)):
+        value = location.get(field)
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            return None
+        raw = str(value)
+        if len(raw) > 64 or (isinstance(value, str) and not re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", raw)):
+            return None
+        try:
+            number = Decimal(raw)
+        except InvalidOperation:
+            return None
+        if not number.is_finite() or not -limit <= number <= limit:
+            return None
+        coordinate = format(number, "f")
+        coordinates.append(coordinate.rstrip("0").rstrip(".") if "." in coordinate else coordinate)
+    latitude, longitude = coordinates
+    url = "https://yandex.ru/maps/?pt=%s,%s&z=16&l=map" % (longitude, latitude)
+    from app.services.sanitize import sanitize_text
+    address = location.get("address")
+    address = sanitize_text(address).replace("[", "［").replace("]", "］") if isinstance(address, str) else ""
+    return "📍 %s\n%s" % (address, url) if address else "📍 Местоположение: " + url
 
 
 class TelegramError(RuntimeError):

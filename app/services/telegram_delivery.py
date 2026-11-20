@@ -54,6 +54,15 @@ def _commit(db):
         raise tg.TelegramError("telegram_commit_conflict", retryable=True) from None
 
 
+def _flush(db):
+    try:
+        db.flush()
+    except IntegrityError:
+        # The dedup index may reject a concurrent receipt before commit, too.
+        db.rollback()
+        raise tg.TelegramError("telegram_commit_conflict", retryable=True) from None
+
+
 def _time(value):
     if isinstance(value, str):
         try:
@@ -100,20 +109,26 @@ def accept_incoming(db, channel, data, *, media_jobs=None):
         parts = [part for part in (caption, raw_text) if isinstance(part, str) and part]
         raw_text = "\n".join(dict.fromkeys(parts))
     text = sanitize_text(raw_text).replace("[", "［").replace("]", "］") if isinstance(raw_text, str) else ""
-    if is_media:
+    stored_type = "TEXT"
+    if content.get("type") == "LOCATION":
+        location = tg.location_text(content.get("location"))
+        location = location or "Клиент отправил местоположение без корректных координат. Попросите клиента отправить его заново."
+        text = (text + "\n" if text else "") + location
+        stored_type = "LOCATION"
+    elif is_media:
         if len(raw_text) > 4096:
             text += "\nПодпись сокращена. Попросите клиента прислать продолжение."
     elif content.get("type") != "TEXT" or not text:
         text = (text + "\n" if text else "") + UNSUPPORTED
     elif len(raw_text) > 4096:
         text += "\nТекст сокращён. Попросите клиента прислать продолжение."
-    message = Message(channel_id=channel.id, direction="incoming", text=text, content_type="TEXT",
+    message = Message(channel_id=channel.id, direction="incoming", text=text, content_type=stored_type,
                       max_message_id=msg_id, subscriber_identifier=address, subscriber_id_type="TELEGRAM_ID",
                       subscriber_user_id="tg:" + address, user_name=name, user_last_name=last_name,
                       bitrix_chat_id=tg.chat_id(channel, address), line_id=str(channel.portal.open_line_id),
                       sent_at=_time(data.get("receivedAt")))
     db.add(message)
-    db.flush()
+    _flush(db)
     task = _task(db, channel.id, tg.RECEIVE, key, {"message_id": message.id, "phone": phone})
     if is_media:
         media_jobs.append((task, message, attachment, content["type"]))
@@ -154,7 +169,7 @@ async def accept_incoming_with_media(db, channel, data):
             payload = json.loads(task.payload)
             payload["file_key"] = key
             task.payload = _json(payload)
-            db.flush()
+            _flush(db)
         except tg.TelegramError as exc:
             if exc.retryable:
                 raise
@@ -234,7 +249,7 @@ def accept_outgoing(db, portal, data, *, media_jobs=None):
                           user_last_name=original.user_last_name, bitrix_chat_id=im_chat,
                           im_message_id=im_id, line_id=line, edna_request_id=uuid.uuid4().hex)
         db.add(message)
-        db.flush()
+        _flush(db)
         task = _task(db, channel.id, tg.SEND, key, {
             "message_id": message.id, "chat_id": external_chat, "content_hash": content_hash,
             "attempt_started": False,
@@ -244,7 +259,7 @@ def accept_outgoing(db, portal, data, *, media_jobs=None):
         elif files or not text or len(text) > 4096:
             task.status, task.last_error = "failed", "telegram_text_only_or_invalid_text"
             enqueue_notice(db, message, "unsupported")
-        db.flush()  # Make duplicates inside this very batch visible with autoflush=False.
+        _flush(db)  # Make duplicates inside this very batch visible with autoflush=False.
     if media_jobs is None:
         _commit(db)
 
@@ -266,7 +281,7 @@ async def accept_outgoing_with_media(db, portal, data):
             payload = json.loads(task.payload)
             payload.update(file_key=key, media_type=media_type)
             task.payload = _json(payload)
-            db.flush()
+            _flush(db)
         except tg.TelegramError as exc:
             if exc.retryable:
                 raise  # Entire batch rolls back; no secret URL is persisted.
