@@ -237,7 +237,7 @@ class TelegramCase(TelegramFixture):
             self.assertEqual((await self.client.post('/incoming/tg-token', json=data)).status_code, 200)
             await worker._process_one_task()
             forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
-            self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567', 'phone': '+79990000001'})
+            self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567', 'name': 'Telegram', 'phone': '+79990000001'})
             self.assertEqual(forwarded['chat']['name'], 'Telegram 12345678901234567')
             self.assertNotIn('disable_crm', forwarded['message'])
         self.assertEqual(self.rows(tg.RENAME), [])
@@ -254,7 +254,7 @@ class TelegramCase(TelegramFixture):
             db.commit()
         await worker._process_one_task()
         forwarded = self.bitrix.call_args.args[3]['MESSAGES'][0]
-        self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567'})
+        self.assertEqual(forwarded['user'], {'id': 'tg:12345678901234567', 'name': 'Telegram'})
         self.assertEqual(forwarded['chat']['name'], 'Telegram 12345678901234567')
 
     async def test_real_name_title_is_same_for_initial_delivery_and_rename(self):
