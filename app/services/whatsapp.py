@@ -17,8 +17,8 @@ from app.services.log_paths import payload_for_log
 logger = logging.getLogger(__name__)
 CHANNEL_TYPE = "WHATSAPP_MESSENGER"
 CONNECTOR = "edna_whatsapp_messenger"
-# WA-A01: v1 confirmed by owner; kebab-case slug inferred from Telegram/MAX.
-API_URL = "https://app.edna.ru/api/v1/out-messages/whatsapp-messenger"
+# WA-A01: exact path confirmed by owner on 2026-11-20; live delivery pending.
+API_URL = "https://app.edna.ru/api/v1/out-messages/wa-messenger"
 # WA-A04: application limit copied from Telegram, not an edna guarantee.
 MAX_TEXT_LENGTH = 4096
 RECEIVE, SEND, STATUS = "wa_messenger_receive", "wa_messenger_send", "wa_messenger_status"

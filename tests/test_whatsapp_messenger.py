@@ -405,7 +405,7 @@ class WhatsAppTransportTests(unittest.IsolatedAsyncioTestCase):
         client_factory = httpx.AsyncClient
         with patch.object(wa.httpx, "AsyncClient", side_effect=lambda: client_factory(transport=httpx.MockTransport(respond))):
             await wa.send_text("synthetic", "sender", "opaque:123@wa", "Hello", "request-1")
-        self.assertEqual(str(requests[0].url), wa.API_URL)
+        self.assertEqual(str(requests[0].url), "https://app.edna.ru/api/v1/out-messages/wa-messenger")
         body = json.loads(requests[0].content)
         self.assertEqual(body["to"], {"type": "WHATSAPP_MESSENGER_ID", "value": "opaque:123@wa"})
         self.assertEqual(body["from"], "sender")
