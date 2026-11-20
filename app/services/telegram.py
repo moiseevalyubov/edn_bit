@@ -206,7 +206,9 @@ async def bitrix_call(portal, db, method, params):
 
 async def prepare_connector(portal, db, line_id=None):
     await bitrix_call(portal, db, "imconnector.register", {
-        "ID": CONNECTOR, "NAME": "Telegram от edna", "CHAT_GROUP": True,
+        # Group mode bypasses the incoming CRM tracker. Telegram customers
+        # use one-to-one chats so the line can create/link CRM entities.
+        "ID": CONNECTOR, "NAME": "Telegram от edna", "CHAT_GROUP": False,
         "NEED_SYSTEM_MESSAGES": False, "NEWSLETTER": False,
         "EDIT_INTERNAL_MESSAGES": False, "DEL_INTERNAL_MESSAGES": False,
         "ICON": {"DATA_IMAGE": "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2048%2048'%3E%3Ccircle%20cx='24'%20cy='24'%20r='24'%20fill='%2329a9eb'/%3E%3Cpath%20d='M10%2023L37%2012L29%2036L22%2027Z'%20fill='white'/%3E%3C/svg%3E", "COLOR": "#29a9eb"},

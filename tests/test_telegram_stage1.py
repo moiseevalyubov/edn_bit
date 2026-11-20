@@ -256,7 +256,8 @@ class TelegramCase(TelegramFixture):
         await worker._process_one_task()  # Independent durable cosmetic update.
         self.assertEqual(self.bitrix.call_args.args[2], 'imconnector.chat.name.set')
         self.assertEqual(self.bitrix.call_args.args[3], {
-            'CONNECTOR': tg.CONNECTOR, 'LINE': 7, 'CHAT_ID': old_chat, 'NAME': 'demo_customer'})
+            'CONNECTOR': tg.CONNECTOR, 'LINE': 7, 'CHAT_ID': old_chat, 'NAME': 'demo_customer',
+            'USER_ID': 'tg:12345678901234567'})
         self.assertEqual(self.rows(tg.RENAME)[0][1], 'sent')
         self.assertEqual(sum(call.args[2] == 'imconnector.send.messages' for call in self.bitrix.call_args_list), 2)
 
@@ -617,6 +618,21 @@ class TelegramCase(TelegramFixture):
         legacy.assert_awaited_once()
         self.assertEqual(self.bitrix.call_args.args[3]["LINE"], 99)
         self.assertEqual(self.bitrix.call_args.args[3]["CONNECTOR"], tg.CONNECTOR)
+
+    async def test_existing_telegram_registration_enables_one_to_one_crm_tracking(self):
+        # Opening settings re-registers existing channels too. Group mode must
+        # not silently bypass CRM even when messages omit disable_crm.
+        with patch.object(api, "require_channel_admin", AsyncMock()), \
+             patch.object(api, "check_admin_context", AsyncMock(return_value=True)):
+            result = await self.client.post("/api/telegram/prepare", json={"member_id": "test-portal"})
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual([call.args[2] for call in self.bitrix.call_args_list],
+                         ["imconnector.register", "imconnector.activate"])
+        registration = self.bitrix.call_args_list[0].args[3]
+        self.assertEqual(registration["ID"], "edna_telegram")
+        self.assertIs(registration["CHAT_GROUP"], False)
+        self.assertEqual(self.bitrix.call_args_list[1].args[3],
+                         {"CONNECTOR": tg.CONNECTOR, "LINE": 7, "ACTIVE": "1"})
 
     async def register_new_channel(self, *, subject_id=None, profiles=None, incoming_result=None,
                                    callback_error=None, admin_error=None, extra=None, status_result=None):

@@ -413,6 +413,7 @@ async def execute_task(task_id, session_factory):
                         await tg.bitrix_call(channel.portal, db, "imconnector.chat.name.set", {
                             "CONNECTOR": tg.CONNECTOR, "LINE": int(message.line_id),
                             "CHAT_ID": tg.chat_id(channel, message.subscriber_identifier), "NAME": title,
+                            "USER_ID": message.subscriber_user_id,
                         })
                         logger.info("Telegram chat name updated: channel=%s message_id=%s", channel.id, message.id)
                 elif task.task_type == tg.NOTICE:
