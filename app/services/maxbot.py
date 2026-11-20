@@ -324,8 +324,6 @@ async def configure_incoming_webhook(
         )
     manual = match is None and manual_subject_id is not None
     if manual:
-        if not settings.telegram_enabled:
-            raise WebhookSetupError("Поддержка Telegram ещё не включена администратором сервера.")
         # TEMP: channel-profile currently omits the tested Telegram channel.
         # The administrator supplies the pair; callback success cannot verify it.
         # Removal conditions and limitations are documented in review.md.
@@ -337,7 +335,7 @@ async def configure_incoming_webhook(
         raise WebhookSetupError(
             "В списке каналов, доступных этому API-ключу edna, нет такого Sender ID. "
             "Проверьте название подписи (subject), аккаунт и доступ API-ключа к каналу."
-            + (" Для Telegram можно указать Subject ID." if settings.telegram_enabled else ""),
+            + (" Для Telegram можно указать Subject ID."),
             fatal=True,
         )
 
@@ -355,8 +353,6 @@ async def configure_incoming_webhook(
 
     if str(channel_type or "").upper() == "TELEGRAM":
         channel_type = "TELEGRAM"
-        if not settings.telegram_enabled:
-            raise WebhookSetupError("Поддержка Telegram ещё не включена администратором сервера.")
         if not manual and match.get("active") is not True:
             raise WebhookSetupError("Канал Telegram не активен в edna.")
         if prepare_channel is not None:

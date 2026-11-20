@@ -19,6 +19,7 @@ from app.services.delivery_worker import enqueue_outgoing
 from app.services.file_cache import store as cache_file
 from app.services.rate_limiter import rate_limiter
 from app.services import telegram
+from app.services.crm_auth import has_telegram_channel
 from app.services.telegram_delivery import accept_outgoing_with_media as accept_telegram_outgoing
 
 logger = logging.getLogger(__name__)
@@ -82,7 +83,7 @@ def _parse_php_form(flat: dict) -> dict:
 
 
 def update_portal_tokens(portal: Portal, auth: dict, db: Session) -> None:
-    if settings.crm_outreach_enabled or portal.crm_outreach_enabled or settings.telegram_enabled:
+    if settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db):
         # Event OAuth belongs to the initiating employee. Preserve the admin
         # installation credentials required by provider management.
         return
@@ -160,7 +161,7 @@ async def handler(request: Request, db: Session = Depends(get_db)):
 
     event_data = data.get("data") if isinstance(data.get("data"), dict) else {}
     if event_data.get("CONNECTOR") == telegram.CONNECTOR:
-        if not portal.app_token or not settings.telegram_enabled:
+        if not portal.app_token:
             return JSONResponse({"error": "forbidden"}, status_code=403)
         if event != "ONIMCONNECTORMESSAGEADD":
             return JSONResponse({"status": "ok"})

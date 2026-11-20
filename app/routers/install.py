@@ -102,7 +102,7 @@ async def install(request: Request, db: Session = Depends(get_db)):
     except Exception as e:
         logger.warning("Post-install setup error (non-critical): %s", e)
 
-    if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+    if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
         try:
             await telegram.prepare_connector(portal, db)
         except Exception:

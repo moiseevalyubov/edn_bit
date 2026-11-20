@@ -205,8 +205,6 @@ async def bitrix_call(portal, db, method, params):
 
 
 async def prepare_connector(portal, db, line_id=None):
-    if not settings.telegram_enabled:
-        return
     await bitrix_call(portal, db, "imconnector.register", {
         "ID": CONNECTOR, "NAME": "Telegram от edna", "CHAT_GROUP": True,
         "NEED_SYSTEM_MESSAGES": False, "NEWSLETTER": False,

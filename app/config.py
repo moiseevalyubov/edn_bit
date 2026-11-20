@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -17,14 +17,23 @@ class Settings(BaseSettings):
     # #22: working CRM outreach stays off until the staged implementation and
     # portal checks are complete. These are deployment controls, not UI steps.
     crm_outreach_enabled: bool = False
-    # Stage 1: Open Line text only. Never enables Telegram CRM providers.
-    telegram_enabled: bool = False
     # Temporary preprod comparison: only this channel serves outgoing Telegram
     # bytes through the existing MAX memory cache. Zero disables the probe.
     telegram_media_legacy_cache_channel_id: int = 0
     bitrix_expected_app_code: str = ""
 
     model_config = {"env_file": ".env"}
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_telegram_switch(cls, values):
+        # Existing .env files may still contain the retired switch. Accept it
+        # without letting either 0 or 1 control Telegram availability.
+        if isinstance(values, dict):
+            values = dict(values)
+            values.pop("telegram_enabled", None)
+            values.pop("TELEGRAM_ENABLED", None)
+        return values
 
 
 settings = Settings()

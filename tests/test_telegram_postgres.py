@@ -42,9 +42,6 @@ class TelegramPostgresTests(unittest.TestCase):
             db.add(channel)
             db.commit()
             self.channel_id, self.portal_id = channel.id, portal.id
-        self.flag = patch.object(settings, "telegram_enabled", True)
-        self.flag.start()
-        self.addCleanup(self.flag.stop)
 
     def tearDown(self):
         postgres_tests.PostgreSqlTests.tearDown(self)

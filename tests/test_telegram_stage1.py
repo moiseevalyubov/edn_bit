@@ -7,6 +7,8 @@ if os.environ.get("CODEX_CRM_ISOLATED_TESTS") != "1":
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
@@ -33,9 +35,6 @@ class TelegramFixture(DatabaseCase, unittest.IsolatedAsyncioTestCase):
             portal.open_line_id, portal.app_token = "7", "synthetic-app-token"
             portal.token_expires_at = datetime.utcnow() + timedelta(hours=1)
             db.commit()
-        self.flag = patch.object(settings, "telegram_enabled", True)
-        self.flag.start()
-        self.addCleanup(self.flag.stop)
         self.worker_db = patch.object(worker, "SessionLocal", self.Session)
         self.worker_db.start()
         self.addCleanup(self.worker_db.stop)
@@ -86,6 +85,43 @@ class TelegramFixture(DatabaseCase, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status_code, 200, result.text)
 
 class TelegramCase(TelegramFixture):
+    def test_retired_switch_in_dotenv_is_ignored_for_both_values(self):
+        with TemporaryDirectory() as directory:
+            env_file = Path(directory) / ".env"
+            for value in ("0", "1"):
+                env_file.write_text("TELEGRAM_ENABLED=" + value + "\n", encoding="utf-8")
+                config = Settings(_env_file=env_file)
+                self.assertNotIn("telegram_enabled", config.model_dump())
+
+    async def test_max_only_portal_keeps_legacy_auth_and_event_token_refresh(self):
+        from app.services.crm_auth import require_channel_admin
+        with self.Session() as db:
+            channel = db.get(Channel, self.channel_id)
+            channel.channel_type = "MAX_BOT"
+            portal = db.get(Portal, self.portal_id)
+            portal.crm_outreach_enabled = False
+            db.commit()
+            with patch.object(settings, "crm_outreach_enabled", False):
+                await require_channel_admin(portal, db, None)
+                handler.update_portal_tokens(portal, {"access_token": "synthetic-employee"}, db)
+            self.assertEqual(portal.access_token, "synthetic-employee")
+
+    async def test_first_telegram_requires_admin_before_callback_on_max_only_portal(self):
+        with self.Session() as db:
+            db.get(Channel, self.channel_id).channel_type = "MAX_BOT"
+            db.get(Portal, self.portal_id).crm_outreach_enabled = False
+            db.commit()
+        profile = [{"subject": "new-tg", "subjectId": 89, "type": "TELEGRAM", "active": True}]
+        with patch.object(settings, "crm_outreach_enabled", False), \
+             patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=profile)), \
+             patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
+            response = await self.client.post("/api/channels", json={
+                "member_id": "test-portal", "sender": "new-tg", "name": "New Telegram", "api_key": "synthetic"})
+        self.assertEqual(response.status_code, 401)
+        callback.assert_not_awaited()
+        with self.Session() as db:
+            self.assertEqual(db.query(Channel).count(), 1)
+
     async def test_incoming_is_durable_namespaced_and_keeps_crm_tracker(self):
         await self.receive()
         await self.receive()
@@ -313,10 +349,10 @@ class TelegramCase(TelegramFixture):
             else:
                 self.bitrix.assert_not_awaited()
 
-    async def test_flag_off_no_new_work_and_no_telegram_crm_provider(self):
-        with patch.object(settings, "telegram_enabled", False):
-            self.assertFalse(Settings(_env_file=None).telegram_enabled)
-            self.assertEqual((await self.client.post("/incoming/tg-token", json=self.payload())).status_code, 422)
+    async def test_retired_switch_cannot_disable_incoming_or_enable_telegram_crm(self):
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}):
+            self.assertNotIn("telegram_enabled", Settings.model_fields)
+            self.assertEqual((await self.client.post("/incoming/tg-token", json=self.payload())).status_code, 200)
         with self.Session() as db:
             channel, portal = db.get(Channel, self.channel_id), db.get(Portal, self.portal_id)
             self.assertIsNone(outreach_capability(channel))
@@ -401,15 +437,16 @@ class TelegramCase(TelegramFixture):
         await worker._process_one_task()
         self.assertEqual(self.bitrix.call_args.args[3]["LINE"], 7)
 
-    async def test_disabled_work_does_not_starve_legacy_queue(self):
+    async def test_retired_switch_does_not_hold_telegram_or_legacy_queue(self):
         await self.receive()
         with self.Session() as db:
             db.add(MessageDeliveryTask(channel_id=self.channel_id, task_type="send_to_bitrix", direction="incoming", payload="{}"))
             db.commit()
-        with patch.object(settings, "telegram_enabled", False), patch.object(worker, "_execute_incoming", AsyncMock()) as legacy:
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}), patch.object(worker, "_execute_incoming", AsyncMock()) as legacy:
+            self.assertTrue(await worker._process_one_task())
             self.assertTrue(await worker._process_one_task())
             legacy.assert_awaited_once()
-        self.assertEqual(self.rows(tg.RECEIVE)[0][1], "pending")
+        self.assertEqual(self.rows(tg.RECEIVE)[0][1], "sent")
 
     async def test_cross_portal_connector_line_and_app_token_cannot_select_recipient(self):
         await self.receive()
@@ -475,19 +512,21 @@ class TelegramCase(TelegramFixture):
         self.assertEqual(self.rows(tg.SEND)[0][1], "uncertain")
         self.assertEqual(len(self.rows(tg.NOTICE)), 1)
 
-    async def test_late_read_survives_flag_off_disconnect_and_duplicate_status(self):
+    async def test_late_read_survives_disconnect_and_duplicate_status(self):
         await self.send_queued()
+        with patch.object(tg, "send_text", AsyncMock(return_value={})):
+            await worker._process_one_task()
         with self.Session() as db:
             channel = db.get(Channel, self.channel_id)
             channel.is_active = False
             message = db.query(Message).filter_by(direction="outgoing").one()
             request_id = message.edna_request_id
             db.commit()
-        with patch.object(settings, "telegram_enabled", False):
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}):
             for _ in range(2):
                 response = await self.client.post("/status/tg-token", json={"requestId": request_id, "status": "READ"})
                 self.assertEqual(response.status_code, 200, response.text)
-            # SEND held; status still runs and reconciles an early/late receipt.
+            # Status still reconciles receipts after channel disconnection.
             await worker._process_one_task()
         self.assertEqual(len(self.rows(tg.STATUS)), 1)
         self.assertEqual(self.rows(tg.SEND)[0][1], "sent")
@@ -548,11 +587,11 @@ class TelegramCase(TelegramFixture):
         with self.Session() as db:
             self.assertEqual(db.query(Message).filter_by(direction="outgoing").one().channel_id, new_id)
 
-    async def test_disabled_telegram_profile_cannot_change_webhooks(self):
-        profile = [{"subject": "new-tg", "subjectId": 89, "type": "TELEGRAM", "active": True}]
+    async def test_inactive_telegram_profile_cannot_change_webhooks(self):
+        profile = [{"subject": "new-tg", "subjectId": 89, "type": "TELEGRAM", "active": False}]
         with patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=profile)), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback, \
-             patch.object(settings, "telegram_enabled", False):
+             patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}):
             with self.assertRaises(maxbot.WebhookSetupError):
                 await maxbot.configure_incoming_webhook("synthetic", "new-tg", "https://app.invalid/incoming/synthetic")
             callback.assert_not_awaited()
@@ -847,7 +886,7 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
         original_client = httpx.AsyncClient
         def client(**kwargs):
             return original_client(transport=httpx.MockTransport(remote), **kwargs)
-        with patch.object(settings, "telegram_enabled", True), patch.object(maxbot.httpx, "AsyncClient", client), \
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "1"}), patch.object(maxbot.httpx, "AsyncClient", client), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock(return_value={"code": "ok"})) as callback, \
              self.assertLogs(maxbot.logger, level="INFO") as logs:
             info = await maxbot.configure_incoming_webhook("synthetic-private-key", "synthetic-tg", "https://app.invalid/incoming/synthetic-secret", manual_subject_id=7)
@@ -864,23 +903,23 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
     async def test_telegram_lookup_preserves_legacy_and_requires_exact_subject(self):
         max_profile = {"subject": "synthetic-max", "subjectId": 3, "type": "MAX"}
         for enabled in (False, True):
-            with patch.object(settings, "telegram_enabled", enabled), \
+            with patch.dict(os.environ, {"TELEGRAM_ENABLED": str(int(enabled))}), \
                  patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[max_profile])) as fetch:
                 self.assertEqual(await maxbot._find_channel_profile("synthetic", "synthetic-max"), max_profile)
                 fetch.assert_awaited_once_with("synthetic")
-        with patch.object(settings, "telegram_enabled", False), \
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}), \
              patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])) as fetch:
             self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
             fetch.assert_awaited_once_with("synthetic")
         for profiles in ([{"subject": "other", "subjectId": 8, "type": "MAX"}],
                          [{"subject": " missing", "subjectId": 8, "type": "TELEGRAM"}]):
-            with patch.object(settings, "telegram_enabled", True), \
+            with patch.dict(os.environ, {"TELEGRAM_ENABLED": "1"}), \
                  patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=profiles)) as fetch:
                 self.assertIsNone(await maxbot._find_channel_profile("synthetic", "missing"))
                 fetch.assert_awaited_once_with("synthetic")
 
     async def test_failed_default_lookup_never_falls_back_to_supplied_id(self):
-        with patch.object(settings, "telegram_enabled", True), \
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "1"}), \
              patch.object(maxbot, "get_channel_profiles", AsyncMock(side_effect=httpx.ConnectTimeout("unavailable"))), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
             with self.assertRaises(maxbot.WebhookSetupError) as error:
@@ -901,12 +940,12 @@ class TelegramTransportTests(unittest.IsolatedAsyncioTestCase):
                     await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/test", manual_subject_id=7)
                 callback.assert_not_awaited()
 
-    async def test_manual_telegram_cannot_bypass_disabled_flag(self):
-        with patch.object(settings, "telegram_enabled", False), \
+    async def test_manual_telegram_still_requires_valid_subject_id(self):
+        with patch.dict(os.environ, {"TELEGRAM_ENABLED": "0"}), \
              patch.object(maxbot, "get_channel_profiles", AsyncMock(return_value=[])), \
              patch.object(maxbot, "set_in_message_callback", AsyncMock()) as callback:
             with self.assertRaises(maxbot.WebhookSetupError):
-                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/test", manual_subject_id=7)
+                await maxbot.configure_incoming_webhook("synthetic", "missing", "https://app.invalid/incoming/test", manual_subject_id=0)
             callback.assert_not_awaited()
 
     def test_safe_traceback_does_not_dump_sql_or_http_credentials(self):

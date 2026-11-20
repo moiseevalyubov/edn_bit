@@ -5,6 +5,7 @@ import re
 from fastapi import HTTPException
 
 from app.config import settings
+from app.models import Channel
 from app.services.crm_bitrix import CrmBitrixError, call_crm_method
 
 logger = logging.getLogger(__name__)
@@ -58,9 +59,15 @@ async def check_admin_context(portal, db, access_token=None, *, check_scope=Fals
     return True
 
 
+def has_telegram_channel(portal, db):
+    # Include disconnected channels: their installation credentials still serve
+    # late receipts and later reconnection. MAX-only installations stay unchanged.
+    return db.query(Channel.id).filter_by(portal_id=portal.id, channel_type="TELEGRAM").first() is not None
+
+
 async def require_channel_admin(portal, db, authorization: str | None, *, always=False, allow_uninstalled=False, allow_installing=False):
     # Preserve existing installations when the feature has never been enabled.
-    if not (always or settings.crm_outreach_enabled or portal.crm_outreach_enabled or settings.telegram_enabled):
+    if not (always or settings.crm_outreach_enabled or portal.crm_outreach_enabled or has_telegram_channel(portal, db)):
         return
     token = bearer_token(authorization)
     try:

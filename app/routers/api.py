@@ -95,6 +95,7 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
     async def prepare_new_type(profile):
         if str(profile.get("type") or "").upper() != "TELEGRAM":
             return
+        await require_channel_admin(portal, db, authorization, always=True)
         if not portal.app_token:
             raise WebhookSetupError("Для Telegram нужно завершить штатное обновление приложения: отсутствует application_token.")
         try:
@@ -119,7 +120,7 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
             (Channel.subject_id == profile.get("subjectId")) | (Channel.sender == body.sender),
         ).first():
             raise WebhookSetupError("Канал с таким Sender ID или Subject ID уже подключён к этому порталу")
-    options = {"prepare_channel": prepare_new_type} if settings.telegram_enabled else {}
+    options = {"prepare_channel": prepare_new_type}
     if body.subject_id is not None:
         options["manual_subject_id"] = body.subject_id
     try:
@@ -151,6 +152,8 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
             "Channel (sender=%s): auto webhook setup failed (transient, type=%s): %s",
             body.sender, channel_type or "unknown", e,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         auto_error = "Не удалось связаться с edna для автоматической настройки. Укажите URL вручную."
         logger.warning(
@@ -158,7 +161,7 @@ async def create_channel(body: ChannelCreate, db: Session = Depends(get_db), aut
             body.sender, type(e).__name__, e,
         )
 
-    if settings.telegram_enabled and channel_type is None:
+    if channel_type is None:
         raise HTTPException(503, "Не удалось определить тип канала в edna. Повторите подключение позже")
     portal = db.query(Portal).filter_by(id=portal.id).populate_existing().with_for_update().one()
     if portal.uninstalled_at is not None:
@@ -208,7 +211,7 @@ async def create_line(member_id: str, db: Session = Depends(get_db), authorizati
     try:
         line_id = await create_open_line(portal, db, "edna MAX")
         await activate_connector(portal, db, line_id)
-        if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+        if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
             await telegram.prepare_connector(portal, db, line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка создания линии: {e}")
@@ -223,7 +226,7 @@ async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db), author
     await require_channel_admin(portal, db, authorization)
     try:
         await activate_connector(portal, db, body.line_id)
-        if settings.telegram_enabled and db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
+        if db.query(Channel).filter_by(portal_id=portal.id, channel_type="TELEGRAM", is_active=True).first():
             await telegram.prepare_connector(portal, db, body.line_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Ошибка активации коннектора: {e}")
@@ -234,8 +237,6 @@ async def set_open_line(body: OpenLineSet, db: Session = Depends(get_db), author
 
 @router.post("/telegram/prepare")
 async def prepare_telegram(body: dict, db: Session = Depends(get_db), authorization: str | None = Header(default=None)):
-    if not settings.telegram_enabled:
-        return {"enabled": False}
     portal = get_portal_or_404(body.get("member_id"), db)
     await require_channel_admin(portal, db, authorization, always=True)
     if not portal.app_token:

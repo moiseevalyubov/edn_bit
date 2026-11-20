@@ -76,8 +76,6 @@ def _time(value):
 
 
 def accept_incoming(db, channel, data, *, media_jobs=None):
-    if not settings.telegram_enabled:
-        raise tg.TelegramError("telegram_disabled")
     if not channel.is_active or not channel.portal or channel.portal.uninstalled_at is not None:
         raise tg.TelegramError("channel_unavailable")
     if not channel.portal.open_line_id:
@@ -181,8 +179,8 @@ async def accept_incoming_with_media(db, channel, data):
 
 
 def accept_outgoing(db, portal, data, *, media_jobs=None):
-    if not settings.telegram_enabled or portal.uninstalled_at is not None:
-        raise tg.TelegramError("telegram_disabled")
+    if portal.uninstalled_at is not None:
+        raise tg.TelegramError("channel_unavailable")
     if not portal.app_token:
         raise tg.TelegramError("app_token_required")
     event = data.get("data")
@@ -399,7 +397,7 @@ async def execute_task(task_id, session_factory):
                 if task.task_type == tg.RECEIVE:
                     await _deliver(db, message, payload.get("phone"), file_key=payload.get("file_key"))
                 elif task.task_type == tg.RENAME:
-                    if not channel.is_active or channel.portal.uninstalled_at is not None or not settings.telegram_enabled:
+                    if not channel.is_active or channel.portal.uninstalled_at is not None:
                         raise tg.TelegramError("channel_unavailable")
                     received = db.query(MessageDeliveryTask).filter_by(dedup_key=payload.get("receive_key"),
                         task_type=tg.RECEIVE, channel_id=channel.id).first()
@@ -422,7 +420,7 @@ async def execute_task(task_id, session_factory):
                 elif task.task_type == tg.SEND:
                     if payload.get("attempt_started"):
                         raise tg.TelegramError("telegram_send_interrupted", uncertain=True)
-                    if not settings.telegram_enabled or not channel.is_active or channel.portal.uninstalled_at is not None:
+                    if not channel.is_active or channel.portal.uninstalled_at is not None:
                         raise tg.TelegramError("channel_unavailable")
                     if settings.edna_force_fail == "1":
                         raise tg.TelegramError("forced_send_failure")
@@ -450,7 +448,7 @@ async def execute_task(task_id, session_factory):
                     # inserts while the HTTP send is in flight (no callback deadlock).
                     portal = db.query(Portal).filter_by(id=channel.portal_id).populate_existing().with_for_update(key_share=True).one()
                     channel = db.query(Channel).filter_by(id=task.channel_id).populate_existing().with_for_update(key_share=True).one()
-                    if not channel.is_active or portal.uninstalled_at is not None or not settings.telegram_enabled:
+                    if not channel.is_active or portal.uninstalled_at is not None:
                         raise tg.TelegramError("channel_unavailable")
                     if media_url:
                         await tg.send_media(channel.api_key, channel.sender, message.subscriber_identifier,

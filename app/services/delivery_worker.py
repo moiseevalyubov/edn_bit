@@ -348,8 +348,6 @@ async def _process_one_task() -> bool:
         held_types = []
         if not settings.crm_outreach_enabled:
             held_types.append(SEND_CRM_TO_EDNA)
-        if not settings.telegram_enabled:
-            held_types.extend([telegram.SEND, telegram.RECEIVE, telegram.RENAME])
         task = (
             db.query(MessageDeliveryTask)
             .filter_by(status="pending")
