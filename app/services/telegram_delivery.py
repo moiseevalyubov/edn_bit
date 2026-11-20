@@ -351,10 +351,9 @@ async def _deliver(db, message, phone=None, *, notice=None, file_key=None):
     portal = channel.portal
     if portal.uninstalled_at is not None:
         raise tg.TelegramError("portal_uninstalled")
-    # Omitting name makes Bitrix reset the external participant to "Гость".
-    # Use a single neutral word, never our ID-bearing chat title or a made-up
-    # surname, while preserving CRM tracking by the real phone and identity.
-    user = {"id": message.subscriber_user_id, "name": "Telegram"}
+    # An unnamed participant uses the bare Telegram ID as an explicit fallback.
+    # Keep it in a single field, without the two-word title or a fake surname.
+    user = {"id": message.subscriber_user_id, "name": message.subscriber_identifier}
     if _has_client_name(message):
         user["name"] = message.user_name
         if message.user_last_name:
