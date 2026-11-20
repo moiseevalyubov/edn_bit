@@ -160,6 +160,7 @@ class MediaCase(TelegramFixture):
         return event
 
     async def test_file_and_task_saved_atomically_then_sent_from_another_session(self):
+        self.app.include_router(files.router)
         event = await self.file_event(text="Caption")
         with patch.object(media, "download", AsyncMock(return_value=(PDF, "application/pdf"))) as download:
             response = await self.client.post("/handler", json=event)
@@ -178,6 +179,12 @@ class MediaCase(TelegramFixture):
             self.assertEqual(send.call_args.args[3], "DOCUMENT")
             self.assertTrue(send.call_args.args[4].startswith("https://app.invalid/file/tg-"))
             self.assertEqual(send.call_args.kwargs, {"text": "Caption"})
+            response = await self.client.get(send.call_args.args[4])
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.content, PDF)
+            self.assertEqual(response.headers["content-type"], "application/pdf")
+            self.assertEqual(int(response.headers["content-length"]), len(PDF))
+            self.assertIn("contract.pdf", response.headers["content-disposition"])
         self.assertEqual(self.rows(tg.SEND)[0][1], "sent")
 
     async def test_duplicates_with_refreshed_sign_do_not_download_or_send_again(self):

@@ -31,7 +31,10 @@ async def serve_file(
         except telegram.TelegramError:
             raise HTTPException(status_code=404, detail="File not found") from None
         disposition = "inline" if entry.content_type.startswith("image/") else "attachment"
-        return Response(content=entry.content, media_type=entry.content_type, headers={
+        content = entry.content
+        logger.info("Serving Telegram file: message_id=%s bytes=%s mime=%s",
+                    entry.message_id, len(content), entry.content_type)
+        return Response(content=content, media_type=entry.content_type, headers={
             "Content-Disposition": disposition + "; filename*=UTF-8''" + quote(entry.name, safe=""),
             "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
         })
