@@ -244,9 +244,19 @@ async def send_media(api_key, sender, address, media_type, url, name, out_messag
     return await send_content(api_key, sender, address, content, out_message_id)
 
 
-async def send_content(api_key, sender, address, content, out_message_id):
-    telegram_id(address)
-    payload = {"from": sender, "to": {"type": "TELEGRAM_ID", "value": address},
+async def send_text_to_phone(api_key, sender, phone, text, out_message_id):
+    if not isinstance(text, str) or not text.strip() or len(text) > 4096:
+        raise TelegramError("invalid_text")
+    return await send_content(api_key, sender, phone, {"type": "TEXT", "text": text},
+                              out_message_id, address_type="PHONE")
+
+
+async def send_content(api_key, sender, address, content, out_message_id, *, address_type="TELEGRAM_ID"):
+    if address_type == "TELEGRAM_ID":
+        telegram_id(address)
+    elif address_type != "PHONE" or not isinstance(address, str) or not re.fullmatch(r"\+[1-9][0-9]{6,14}", address, flags=re.ASCII):
+        raise TelegramError("invalid_phone")
+    payload = {"from": sender, "to": {"type": address_type, "value": address},
                "outMessageId": out_message_id, "content": content}
     log_payload("outgoing request", payload)
     try:
@@ -271,6 +281,9 @@ async def send_content(api_key, sender, address, content, out_message_id):
         raise TelegramError("edna_invalid_response", uncertain=True) from None
     if not isinstance(result, dict) or result.get("outMessageId") != out_message_id:
         raise TelegramError("edna_response_id_mismatch", uncertain=True)
-    if result.get("telegramId") is not None and str(result["telegramId"]) != address:
+    recipient_field = "telegramId" if address_type == "TELEGRAM_ID" else "phone"
+    recipient = result.get(recipient_field)
+    if recipient is not None and (not isinstance(recipient, (str, int)) or isinstance(recipient, bool)
+                                  or str(recipient) != address):
         raise TelegramError("edna_recipient_mismatch", uncertain=True)
     return result

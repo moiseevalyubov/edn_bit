@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.models import Channel, CrmMessageProvider, CrmMessageStatusEvent, CrmOutgoingMessage, MessageDeliveryTask, Portal
 from app.services.task_types import SEND_CRM_TO_EDNA, UPDATE_CRM_STATUS
+from app.services.crm_channels import outreach_capability
 
 logger = logging.getLogger(__name__)
 MAX_TEXT_LENGTH = 4000
@@ -101,7 +102,8 @@ def accept_crm_message(db: Session, data: dict) -> CrmOutgoingMessage:
         phone = normalize_phone(phone)
     except ValueError:
         invalid = "invalid_phone"
-    if not text.strip() or len(text) > MAX_TEXT_LENGTH:
+    capability = outreach_capability(channel)
+    if not text.strip() or len(text) > (capability.max_text_length if capability else MAX_TEXT_LENGTH):
         invalid = "invalid_text"
 
     existing = db.query(CrmOutgoingMessage).filter_by(
@@ -114,9 +116,11 @@ def accept_crm_message(db: Session, data: dict) -> CrmOutgoingMessage:
 
     if not settings.crm_outreach_enabled or not portal.crm_outreach_enabled:
         raise CrmRequestError("feature_disabled", 404)
+    if (channel.channel_type or "").upper() == "TELEGRAM" and not settings.crm_telegram_outreach_enabled:
+        raise CrmRequestError("feature_disabled", 404)
     if not channel.is_active or provider.desired_state != "present":
         invalid = "channel_disabled"
-    elif (channel.channel_type or "").upper() != "MAX":
+    elif capability is None:
         invalid = "unsupported_channel"
     elif provider.applied_revision < 1:
         invalid = "provider_not_ready"

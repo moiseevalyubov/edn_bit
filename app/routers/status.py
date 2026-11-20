@@ -91,7 +91,16 @@ async def status_callback(webhook_token: str, request: Request, db: Session = De
     if telegram.is_telegram(channel):
         telegram.log_payload("status", data, channel.id)
         try:
+            # CRM sends use the same channel callback, but have their own
+            # correlation/state. Do not turn their READ into an Open Line READ.
+            telegram.check_subject(channel, data)
+            if record_edna_status(db, channel, data):
+                db.commit()
+                return _ok()
             accept_telegram_status(db, channel, data)
+        except CrmRequestError as exc:
+            db.rollback()
+            return JSONResponse({"error": exc.code}, status_code=exc.status_code)
         except telegram.TelegramError as exc:
             db.rollback()
             return JSONResponse({"error": str(exc)}, status_code=503 if exc.retryable else 422)

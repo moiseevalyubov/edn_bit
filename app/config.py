@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # #22: working CRM outreach stays off until the staged implementation and
     # portal checks are complete. These are deployment controls, not UI steps.
     crm_outreach_enabled: bool = False
+    # Independent rollout/stop control for Telegram from CRM. Open Lines and
+    # late CRM delivery receipts stay available when this is off.
+    crm_telegram_outreach_enabled: bool = False
     # Temporary preprod comparison: only this channel serves outgoing Telegram
     # bytes through the existing MAX memory cache. Zero disables the probe.
     telegram_media_legacy_cache_channel_id: int = 0

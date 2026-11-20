@@ -130,6 +130,48 @@ class ProviderTests(OutreachCase, unittest.IsolatedAsyncioTestCase):
             self.assertEqual(db.query(CrmMessageProvider).one().sync_state, "ready")
             self.assertEqual(db.get(Portal, self.portal_id).access_token, "synthetic-access")
 
+    async def test_telegram_rollout_registers_separate_senders_and_stop_preserves_max(self):
+        with self.Session() as db:
+            telegram = Channel(portal_id=self.portal_id, name="Telegram sales", sender="tg-sales",
+                               api_key="synthetic", channel_type="TELEGRAM", is_active=True)
+            db.add(telegram)
+            db.commit()
+            telegram_id = telegram.id
+        max_code, telegram_code = "edna_max_" + str(self.channel_id), "edna_telegram_" + str(telegram_id)
+        await self.prepare()
+        await self.sync()
+        self.assertEqual(set(self.remote), {max_code})
+        max_before = self.remote[max_code].copy()
+        with patch.object(settings, "crm_telegram_outreach_enabled", True):
+            await self.prepare()
+            await self.sync()
+            self.assertEqual(set(self.remote), {max_code, telegram_code})
+            self.assertEqual(self.remote[telegram_code]["NAME"], "Telegram sales в приложении Telegram от edna")
+            self.assertEqual(self.remote[telegram_code]["HANDLER"], "https://app.invalid/crm/messages/send")
+            with self.Session() as db:
+                db.get(Channel, telegram_id).name = "Telegram renamed"
+                stage_provider(db, db.get(Portal, self.portal_id), db.get(Channel, telegram_id))
+                db.commit()
+            await self.sync()
+            self.assertEqual(self.remote[telegram_code]["NAME"], "Telegram renamed в приложении Telegram от edna")
+            # Turning off the dedicated CRM control removes only its provider.
+        await self.prepare()
+        await self.sync()
+        self.assertEqual(set(self.remote), {max_code})
+        self.assertEqual(self.remote[max_code], max_before)
+        with self.Session() as db:
+            self.assertTrue(db.get(Channel, telegram_id).is_active)
+
+    async def test_telegram_with_missing_messageservice_scope_registers_neither_sender(self):
+        with self.Session() as db:
+            db.get(Channel, self.channel_id).channel_type = "TELEGRAM"
+            db.commit()
+        with patch.object(settings, "crm_telegram_outreach_enabled", True):
+            self.granted_scope = False
+            self.assertEqual((await self.prepare())["state"], "scope_required")
+            await self.sync()
+        self.assertEqual(self.remote, {})
+
     async def test_existing_probe_code_is_updated_without_duplicate_add(self):
         code = "edna_max_" + str(self.channel_id)
         self.remote[code] = {"NAME": "probe", "HANDLER": "https://app.invalid/probe22/send",

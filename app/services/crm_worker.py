@@ -12,6 +12,8 @@ from app.services.crm_bitrix import CrmBitrixError, update_message_status
 from app.services.crm_outreach import set_desired_status
 from app.services.crm_locks import operation_lock as _status_lock
 from app.services.maxbot import send_message_max
+from app.services import telegram
+from app.services.crm_channels import outreach_capability
 from app.services.task_types import SEND_CRM_TO_EDNA, UPDATE_CRM_STATUS
 
 logger = logging.getLogger(__name__)
@@ -93,8 +95,14 @@ async def _send(task_id, session_factory):
             task.next_attempt_at = datetime.utcnow() + timedelta(seconds=30)
             db.commit()
             return
+        channel_type = (channel.channel_type or "").upper() if channel else ""
+        if channel_type == "TELEGRAM" and not settings.crm_telegram_outreach_enabled:
+            task.status = "pending"
+            task.next_attempt_at = datetime.utcnow() + timedelta(seconds=30)
+            db.commit()
+            return
         if not (portal and portal.uninstalled_at is None and channel and channel.portal_id == portal.id
-                and channel.is_active and (channel.channel_type or "").upper() == "MAX"
+                and channel.is_active and outreach_capability(channel)
                 and provider and provider.desired_state == "present" and provider.provider_code == message.provider_code):
             task.status, message.send_state = "failed", "failed"
             task.last_error = message.last_error = "channel_unavailable"
@@ -111,9 +119,16 @@ async def _send(task_id, session_factory):
 
     outcome, error = "accepted", None
     try:
-        result = await send_message_max(**args)
+        if channel_type == "TELEGRAM":
+            result = await telegram.send_text_to_phone(
+                args["api_key"], args["sender"], args["to_value"], args["text"], args["out_message_id"])
+        else:
+            result = await send_message_max(**args)
         if not isinstance(result, dict) or result.get("outMessageId") != args["out_message_id"]:
             outcome, error = "uncertain", "edna_response_id_mismatch"
+    except telegram.TelegramError as exc:
+        outcome = "uncertain" if exc.uncertain else "retry" if exc.retryable else "failed"
+        error = exc.code
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
         # No HTTP request body has been transmitted in these cases.
         outcome, error = "retry", "edna_connect_unavailable"
